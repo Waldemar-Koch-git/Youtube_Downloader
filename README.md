@@ -8,10 +8,10 @@ pip install imageio-ffmpeg pytubefix
 ```
 
 # GUI
-![Gui Front Image](./images_/GUI.jpg"GUI")
+![Gui Front Image](./images_/GUI.jpg)
 ## PO-Token -- YouTubes Anti Bot Schutzmechanismus umgehen --
 Es muss ein existierender Google Account sein, mit dem man Youtube dann nutzen bzw. mit dem Programm verknüpfen möchte. Im Terminal wird der Link abgebildet (Terminal auswählen und mit `STRG` + `Mausklick` auf den link klicken). Ein neues Fenster im Browser öffnet sich, in den man dann den code im Terminal eingeben muss und somit die Verknüpfung bestätigt. 
-![Terminal PO-Token](./images_/PO-Token_add.jpg"PO-Token")
+![Terminal PO-Token](./images_/PO-Token_add.jpg)
 
 # Beschreibung
 ## YouTube Downloader GUI - Modernisierte Version (v3.0.1)
