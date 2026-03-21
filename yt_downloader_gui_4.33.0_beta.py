@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-__version__ = '4.30.1 beta'
+__version__ = '4.33.0 beta'
 
 """
 YouTube Downloader GUI
@@ -10,7 +10,9 @@ aus YouTube-Links mit modernem Design und verbessertem Workflow.
 
 License: MIT
 """
-# pip install imageio-ffmpeg yt-dlp
+# pip install imageio-ffmpeg yt-dlp mutagen
+
+# mutagen for opus files (just only write thumpnail into file)
 
 import os
 import re
@@ -310,6 +312,83 @@ def _rename_after_download(final_path_ref: list, known_names: set):
 
 
 
+
+
+def _embed_thumbnail_as_jpeg(audio_fp: str, ffmpeg_exe: str):
+    """
+    Sucht die zum audio_fp gehörende Thumbnail-Datei (.webp/.jpg/.png),
+    konvertiert sie zu einem kleinen JPEG (500px, q:v 4 ≈ 30–50 KB)
+    und bettet sie via mutagen ein:
+      • .opus  → OggOpus  (metadata_block_picture / FLAC Picture)
+      • .mp3   → ID3 APIC-Tag
+    Thumbnail-Temp-Datei wird danach gelöscht.
+    """
+    import subprocess as _sp
+    if not audio_fp or not os.path.isfile(audio_fp):
+        return
+    ext_lower = os.path.splitext(audio_fp)[1].lower()
+    stem = os.path.splitext(audio_fp)[0]
+    th_src = ''
+    for ext2 in ('.webp', '.jpg', '.jpeg', '.png'):
+        cand = stem + ext2
+        if os.path.isfile(cand):
+            th_src = cand
+            break
+    if not th_src:
+        return
+    th_jpg = stem + '_cover.jpg'
+    try:
+        _sp.run(
+            [ffmpeg_exe, '-y', '-i', th_src,
+             '-vf', 'scale=500:-1', '-q:v', '4', th_jpg],
+            stdout=_sp.DEVNULL, stderr=_sp.DEVNULL, check=True)
+    except Exception:
+        return
+    try:
+        with open(th_jpg, 'rb') as fh:
+            jpg_data = fh.read()
+
+        if ext_lower == '.opus':
+            from mutagen.oggopus import OggOpus
+            from mutagen.flac import Picture
+            import base64
+            pic = Picture()
+            pic.type = 3
+            pic.mime = 'image/jpeg'
+            pic.desc = 'Cover'
+            pic.data = jpg_data
+            audio = OggOpus(audio_fp)
+            audio['metadata_block_picture'] = [
+                base64.b64encode(pic.write()).decode('ascii')
+            ]
+            audio.save()
+
+        elif ext_lower == '.mp3':
+            from mutagen.id3 import ID3, APIC, error as ID3Error
+            try:
+                tags = ID3(audio_fp)
+            except ID3Error:
+                tags = ID3()
+            tags.delall('APIC')
+            tags.add(APIC(
+                encoding=3,        # UTF-8
+                mime='image/jpeg',
+                type=3,            # Cover (front)
+                desc='Cover',
+                data=jpg_data,
+            ))
+            tags.save(audio_fp, v2_version=3)
+
+    except Exception:
+        pass
+    finally:
+        for tmp in (th_jpg, th_src):
+            if tmp and os.path.isfile(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+
 def _deduplicate_entries(entries: list) -> list:
     """Entfernt Duplikate aus einer yt-dlp-Eintrags-Liste (Schlüssel: Video-ID)."""
     seen: set = set()
@@ -448,6 +527,10 @@ class _BaseSelectionDialog(Toplevel):
         self._mode_var        = StringVar(value=default_mode)
         self._bitrate_var     = StringVar(value=default_bitrate)
         self._use_max_bitrate = BooleanVar(value=use_max_bitrate)
+        self._search_var      = StringVar()
+        self._filter_count_var = StringVar()
+        self._list_canvas     = None   # wird in _build() gesetzt
+        self._row_frames: list = []
         self._build()
 
     # ── Subklassen überschreiben diese zwei Methoden ──────────────────────────
@@ -472,10 +555,27 @@ class _BaseSelectionDialog(Toplevel):
         self._build_header(head)
         ttk.Separator(self).pack(fill='x')
 
+        # ── Suchfilter ────────────────────────────────────────────────────────
+        sf = ttk.Frame(self, padding=(8, 4))
+        sf.pack(fill='x')
+        ttk.Label(sf, text="🔍 Suche:", font=('Segoe UI', 9)).pack(side='left')
+        self._search_var = StringVar()
+        search_entry = ttk.Entry(sf, textvariable=self._search_var,
+                                 font=('Segoe UI', 9), width=40)
+        search_entry.pack(side='left', padx=(4, 6), fill='x', expand=True)
+        ttk.Button(sf, text="✕", width=3,
+                   command=lambda: self._search_var.set('')).pack(side='left')
+        self._filter_count_var = StringVar()
+        ttk.Label(sf, textvariable=self._filter_count_var,
+                  font=('Segoe UI', 9), foreground='#555').pack(side='left', padx=(8, 0))
+        self._search_var.trace_add('write', lambda *_: self._filter_rows())
+        ttk.Separator(self).pack(fill='x')
+
         # Scrollbare Liste
         lf = ttk.Frame(self)
         lf.pack(fill='both', expand=True, padx=8, pady=4)
-        canvas = Canvas(lf, borderwidth=0, highlightthickness=0, background=_bg)
+        self._list_canvas = Canvas(lf, borderwidth=0, highlightthickness=0, background=_bg)
+        canvas = self._list_canvas
         vsb = ttk.Scrollbar(lf, orient='vertical', command=canvas.yview)
         canvas.configure(yscrollcommand=vsb.set)
         vsb.pack(side='right', fill='y')
@@ -540,6 +640,38 @@ class _BaseSelectionDialog(Toplevel):
                    style='Action.TButton', command=self._ok).pack(side='right')
 
     # ── Shared-Logik ──────────────────────────────────────────────────────────
+
+    def _get_row_texts(self) -> list[str]:
+        """
+        Gibt eine Liste von Suchbegriffen (je Zeile einen String) zurück.
+        Subklassen können dies überschreiben; Standard: leerer String für jede Zeile.
+        """
+        return ['' for _ in self._row_frames]
+
+    def _filter_rows(self):
+        """Blendet Zeilen ein/aus anhand des Suchtexts; aktualisiert Zähler-Label."""
+        term = self._search_var.get().lower().strip()
+        texts = self._get_row_texts()
+        visible = 0
+        total   = len(self._row_frames)
+        for row, text in zip(self._row_frames, texts):
+            show = (not term) or (term in text.lower())
+            if show:
+                row.pack(fill='x', padx=4, pady=1)
+                visible += 1
+            else:
+                row.pack_forget()
+        if term:
+            self._filter_count_var.set(f"{visible}/{total} sichtbar")
+        else:
+            self._filter_count_var.set('')
+        # Scrollregion aktualisieren
+        try:
+            self._list_canvas.update_idletasks()
+            self._list_canvas.configure(
+                scrollregion=self._list_canvas.bbox('all'))
+        except Exception:
+            pass
 
     def _toggle_bitrate(self):
         mode = self._mode_var.get()
@@ -733,6 +865,11 @@ class PlaylistDialog(_BaseSelectionDialog):
         for var, entry in zip(self._vars, self._entries):
             var.set(not _is_unavailable_entry(entry))
 
+    def _get_row_texts(self) -> list[str]:
+        """Gibt Titel aller Einträge zurück – für den Suchfilter."""
+        return [e.get('title') or f'Eintrag {i+1}'
+                for i, e in enumerate(self._entries)]
+
     def _collect_checked(self) -> set:
         return {i for i, v in enumerate(self._vars) if v.get()}
 
@@ -810,6 +947,10 @@ class MultiURLDialog(_BaseSelectionDialog):
                        'bitrate': self._bitrate_var.get()}
         self.destroy()
 
+    def _get_row_texts(self) -> list[str]:
+        """Gibt URLs zurück – für den Suchfilter im MultiURL-Dialog."""
+        return list(self._urls)
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  Haupt-App
@@ -842,6 +983,8 @@ class YouTubeDownloaderApp:
 
         self.clicked_stream_video = StringVar()
         self.clicked_stream_audio = StringVar()
+        self.ignore_video_var = BooleanVar(value=False)
+        self.ignore_audio_var = BooleanVar(value=False)
 
         self._video_formats: list = []
         self._audio_formats: list = []
@@ -1181,36 +1324,53 @@ class YouTubeDownloaderApp:
         }
         r += 1
 
-        ttk.Label(self._adv_frame, text="Video Stream:",
-                  style='Subtitle.TLabel').grid(row=0, column=0, sticky='w', pady=(0, 3))
-        self.video_combo = ttk.Combobox(self._adv_frame,
+        # ── Bereich: Video Stream ─────────────────────────────────────────────
+        video_lf = ttk.LabelFrame(self._adv_frame, text="Video Stream", padding=(8, 4))
+        video_lf.grid(row=0, column=0, columnspan=2, sticky='ew', pady=(0, 6))
+        video_lf.columnconfigure(0, weight=1)
+
+        video_top = ttk.Frame(video_lf)
+        video_top.grid(row=0, column=0, sticky='ew')
+        video_top.columnconfigure(0, weight=1)
+
+        self.video_combo = ttk.Combobox(video_top,
                                         textvariable=self.clicked_stream_video,
                                         width=68, state='readonly')
-        self.video_combo.grid(row=1, column=0, pady=(0, 7), sticky='ew')
+        self.video_combo.grid(row=0, column=0, sticky='ew', padx=(0, 8))
         self.video_combo['values'] = [_PLACEHOLDER_ANALYSE]
         self.video_combo.current(0)
-        ttk.Checkbutton(self._adv_frame, text="zu MP4 konvertieren",
-                        variable=self.video_to_mp4_var).grid(
-            row=1, column=1, padx=(8, 0), sticky='w')
 
-        ttk.Label(self._adv_frame, text="Audio Stream:",
-                  style='Subtitle.TLabel').grid(row=2, column=0, sticky='w', pady=(0, 3))
-        self.audio_combo = ttk.Combobox(self._adv_frame,
+        video_opts = ttk.Frame(video_lf)
+        video_opts.grid(row=1, column=0, sticky='w', pady=(4, 0))
+        ttk.Checkbutton(video_opts, text="zu MP4 konvertieren",
+                        variable=self.video_to_mp4_var).pack(side='left', padx=(0, 16))
+        ttk.Checkbutton(video_opts, text="Video ignorieren",
+                        variable=self.ignore_video_var).pack(side='left')
+
+        # ── Bereich: Audio Stream ─────────────────────────────────────────────
+        audio_lf = ttk.LabelFrame(self._adv_frame, text="Audio Stream", padding=(8, 4))
+        audio_lf.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(0, 6))
+        audio_lf.columnconfigure(0, weight=1)
+
+        self.audio_combo = ttk.Combobox(audio_lf,
                                         textvariable=self.clicked_stream_audio,
                                         width=68, state='readonly')
-        self.audio_combo.grid(row=3, column=0, pady=(0, 7), sticky='ew')
+        self.audio_combo.grid(row=0, column=0, sticky='ew', pady=(0, 4))
         self.audio_combo['values'] = [_PLACEHOLDER_ANALYSE]
         self.audio_combo.current(0)
 
-        mp3f = ttk.Frame(self._adv_frame)
-        mp3f.grid(row=3, column=1, padx=(8, 0), sticky='w')
-        ttk.Label(mp3f, text="Audio-Format:", style='Info.TLabel').pack(anchor='w')
-        for lbl, val in [("WebM (roh)", "webm"), ("MP3", "mp3"), ("Opus", "opus")]:
-            ttk.Radiobutton(mp3f, text=lbl, variable=self.audio_format_var,
-                            value=val, command=self._toggle_bitrate_state).pack(anchor='w')
-        brow = ttk.Frame(mp3f)
-        brow.pack(anchor='w', pady=(3, 0))
-        ttk.Label(brow, text="Bitrate:", style='Info.TLabel').pack(side='left')
+        audio_opts = ttk.Frame(audio_lf)
+        audio_opts.grid(row=1, column=0, sticky='w')
+
+        ttk.Label(audio_opts, text="Audio-Format:", style='Info.TLabel').pack(side='left', padx=(0, 6))
+        for lbl, val in [("M4A (roh)", "m4a"), ("WebM (roh)", "webm"), ("Opus", "opus"), ("MP3", "mp3")]:
+            ttk.Radiobutton(audio_opts, text=lbl, variable=self.audio_format_var,
+                            value=val, command=self._toggle_bitrate_state).pack(side='left', padx=(0, 4))
+
+        # Bitrate-Frame – nur sichtbar wenn MP3 aktiv, erscheint inline rechts
+        self._bitrate_frame = ttk.Frame(audio_opts)
+        brow = self._bitrate_frame
+        ttk.Label(brow, text="  Bitrate:", style='Info.TLabel').pack(side='left')
         self.bitrate_combo = ttk.Combobox(
             brow, textvariable=self.mp3_bitrate_var,
             values=["320", "256", "192", "160", "128", "96", "64"],
@@ -1218,10 +1378,16 @@ class YouTubeDownloaderApp:
         self.bitrate_combo.pack(side='left', padx=(4, 0))
         ttk.Label(brow, text="kbps", style='Info.TLabel').pack(side='left', padx=(2, 0))
 
+        ttk.Separator(audio_lf, orient='horizontal').grid(row=2, column=0, sticky='ew', pady=(6, 4))
+        ignore_audio_row = ttk.Frame(audio_lf)
+        ignore_audio_row.grid(row=3, column=0, sticky='w')
+        ttk.Checkbutton(ignore_audio_row, text="Audio ignorieren",
+                        variable=self.ignore_audio_var).pack(side='left')
+
         ttk.Button(self._adv_frame, text="📥 Mit Auswahl herunterladen",
                    command=self.download_custom,
                    style='Action.TButton').grid(
-            row=4, column=0, columnspan=2, pady=(10, 0))
+            row=2, column=0, columnspan=2, pady=(4, 0))
 
         # ── Speicherorte & Optionen ───────────────────────────────────────────
         so_header = ttk.Frame(mf, relief='groove', padding=(6, 4))
@@ -1274,7 +1440,7 @@ class YouTubeDownloaderApp:
 
         # ── Cookies-Zeile ─────────────────────────────────────────────────────
         ck_row = ttk.Frame(self._so_frame)
-        ck_row.grid(row=3, column=0, columnspan=3, sticky='w', pady=(6, 2))
+        ck_row.grid(row=4, column=0, columnspan=3, sticky='w', pady=(6, 2))
         ttk.Label(ck_row, text="🍪 Cookies aus Browser:",
                   style='Info.TLabel').pack(side='left', padx=(0, 6))
         _BROWSERS = ["", "chrome", "firefox", "edge", "brave", "opera", "safari"]
@@ -1286,6 +1452,7 @@ class YouTubeDownloaderApp:
                   style='Info.TLabel').pack(side='left')
 
         self.root.after(0, lambda: self._toggle_quickdownload(force_open=True))
+        self.root.after(0, self._toggle_bitrate_state)
 
         # ── Einstellungen automatisch speichern ───────────────────────────────
         for var in (
@@ -1319,8 +1486,10 @@ class YouTubeDownloaderApp:
             self._pct_label.config(text="")))
 
     def _toggle_bitrate_state(self):
-        self.bitrate_combo.config(
-            state='readonly' if self.audio_format_var.get() == 'mp3' else 'disabled')
+        if self.audio_format_var.get() == 'mp3':
+            self._bitrate_frame.pack(side='left', padx=(4, 0))
+        else:
+            self._bitrate_frame.pack_forget()
 
     def _set_download_active(self, active: bool):
         state = 'normal' if active else 'disabled'
@@ -1476,10 +1645,12 @@ class YouTubeDownloaderApp:
         Nur hier wird writethumbnail gesetzt – niemals bei der Analyse.
 
         mode: 'audio_mp3' | 'audio_opus' | 'video_mp4' | 'video_best' | ''
-              Bei Video-Modi wird EmbedThumbnail weggelassen (MKV/WebM
-              unterstützen das nicht zuverlässig). Die .webp/.jpg-Thumbnail-
-              Datei wird nach dem Download automatisch via postprocessor_hook
-              gelöscht, damit kein Bilddatei-Müll übrig bleibt.
+              Bei Video-Modi wird EmbedThumbnail weggelassen.
+
+        Opus: yt-dlp würde das Thumbnail zu PNG konvertieren (→ 800 KB!),
+              weil es PNG in den OGG-Tags erwartet.
+              Ein postprocessor_hook konvertiert stattdessen das heruntergeladene
+              .webp/.jpg zu JPEG – EmbedThumbnail bettet dann JPEG ein.
         """
         opts = self._base_opts()
 
@@ -1502,9 +1673,31 @@ class YouTubeDownloaderApp:
             })
         if self.write_thumbnail_var.get():
             if not is_video:
-                # Audio: Thumbnail herunterladen und einbetten (MP3/Opus unterstützen das)
                 opts['writethumbnail'] = True
-                pps.append({'key': 'EmbedThumbnail'})
+
+                if mode == 'audio_mp3':
+                    # ── MP3: EmbedThumbnail NICHT an yt-dlp delegieren ──────
+                    # yt-dlp konvertiert .webp → .png (unkomprimiert, ~500-800 KB!)
+                    # und bettet dieses riesige PNG als ID3-APIC-Tag ein.
+                    # Stattdessen übernimmt _embed_thumbnail_as_jpeg den Job:
+                    # .webp/.jpg → JPEG 500px (≈ 30–50 KB) → ID3 via mutagen.
+                    opts['convert_thumbnails'] = False
+                    opts['_mp3_embed_ffmpeg']  = opts.get('ffmpeg_location') or 'ffmpeg'
+                    # EmbedThumbnail bewusst NICHT in pps einfügen
+
+                elif mode == 'audio_opus':
+                    # ── Opus: EmbedThumbnail NICHT verwenden ────────────────
+                    # Das Thumbnail wird NACH dem Download direkt eingebettet
+                    # (via _embed_thumbnail_as_jpeg), nicht per Hook.
+                    # yt-dlp würde es sonst als unkomprimiertes PNG einbetten (~800KB).
+                    opts['convert_thumbnails'] = False
+                    opts['_opus_embed_ffmpeg'] = opts.get('ffmpeg_location') or 'ffmpeg'
+                    # EmbedThumbnail bewusst NICHT in pps einfügen
+
+                else:
+                    # Andere Audio-Formate: Standard yt-dlp EmbedThumbnail
+                    pps.append({'key': 'EmbedThumbnail'})
+
             # Bei Video: kein writethumbnail → keine Bilddatei wird erzeugt
         if pps:
             opts['postprocessors'] = pps
@@ -1520,6 +1713,17 @@ class YouTubeDownloaderApp:
 
     def _make_hook(self, prefix="Lade...", idx=0, total=1):
         def hook(d):
+            # ── Abbrechen: sofort Exception werfen → yt-dlp bricht ab ──────────
+            if self._cancel_flag:
+                raise Exception("Download abgebrochen.")
+
+            # ── Pause: blockieren bis Weiter gedrückt wird ──────────────────────
+            if not self._pause_event.is_set():
+                self._pause_event.wait()
+                # Nach dem Warten erneut auf Cancel prüfen
+                if self._cancel_flag:
+                    raise Exception("Download abgebrochen.")
+
             if d['status'] == 'downloading':
                 tb = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
                 db = d.get('downloaded_bytes', 0)
@@ -1947,8 +2151,11 @@ class YouTubeDownloaderApp:
             # → saubere Extension, Metadaten & Thumbnails werden unterstützt
             opus_pp = {'key': 'FFmpegExtractAudio',
                        'preferredcodec': 'opus', 'preferredquality': '0'}
+            # EmbedThumbnail ebenfalls entfernen – unser Hook übernimmt das
             opts['postprocessors'] = [opus_pp] + [
-                p for p in pps if p.get('key') != 'FFmpegExtractAudio']
+                p for p in pps
+                if p.get('key') not in ('FFmpegExtractAudio', 'EmbedThumbnail')]
+            opts['convert_thumbnails'] = False
 
         elif mode == 'video_mp4':
             dest = self.video_path_var.get()
@@ -2012,7 +2219,23 @@ class YouTubeDownloaderApp:
                     info = ydl.extract_info(url)
                     done.append(info.get('title', url))
                 _rename_after_download(final_path_ref, known_names)
+                # Opus-Thumbnail nachträglich als kleines JPEG einbetten
+                if (mode == 'audio_opus'
+                        and final_path_ref[0]
+                        and final_path_ref[0].lower().endswith('.opus')):
+                    _ff = base_opts.get('_opus_embed_ffmpeg', '')
+                    if _ff:
+                        _embed_thumbnail_as_jpeg(final_path_ref[0], _ff)
+                # MP3-Thumbnail: ebenfalls als kleines JPEG einbetten (statt PNG via yt-dlp)
+                elif (mode == 'audio_mp3'
+                        and final_path_ref[0]
+                        and final_path_ref[0].lower().endswith('.mp3')):
+                    _ff = base_opts.get('_mp3_embed_ffmpeg', '')
+                    if _ff:
+                        _embed_thumbnail_as_jpeg(final_path_ref[0], _ff)
             except Exception as e:
+                if self._cancel_flag:
+                    break
                 if silent_errors:
                     skipped.append(url)
                     self.root.after(0, lambda u=url, err=str(e): self.status_var.set(
@@ -2232,12 +2455,13 @@ class YouTubeDownloaderApp:
                 messagebox.showwarning("Fehler", "Keine URL eingegeben!")
                 return
 
-            no_v = v_lbl in _SKIP_LABELS
-            no_a = a_lbl in _SKIP_LABELS
+            no_v = v_lbl in _SKIP_LABELS or self.ignore_video_var.get()
+            no_a = a_lbl in _SKIP_LABELS or self.ignore_audio_var.get()
 
             if no_v and no_a:
                 messagebox.showwarning("Fehler",
-                    "Bitte zuerst eine Einzel-URL analysieren und Stream wählen!")
+                    "Bitte zuerst eine Einzel-URL analysieren und Stream wählen!\n"
+                    "(Oder: Video/Audio-ignorieren-Checkbox deaktivieren.)")
                 return
 
             vfmt = afmt = None
@@ -2282,8 +2506,23 @@ class YouTubeDownloaderApp:
                         'key':              'FFmpegExtractAudio',
                         'preferredcodec':   'opus',
                         'preferredquality': '0',
-                    }] + [p for p in pps if p.get('key') != 'FFmpegExtractAudio']
-                # 'webm' → kein Postprozessor, rohe WebM-Datei
+                    }] + [p for p in pps
+                          if p.get('key') not in ('FFmpegExtractAudio', 'EmbedThumbnail')]
+                    opts['convert_thumbnails'] = False
+                    opts['_opus_embed_ffmpeg'] = opts.get('ffmpeg_location') or 'ffmpeg'
+                elif audio_fmt == 'm4a':
+                    # M4A roh – kein Konvertierungs-PP, Thumbnail-Embedding erlaubt (m4a/mp4)
+                    opts['postprocessors'] = [
+                        p for p in pps if p.get('key') != 'FFmpegExtractAudio'
+                    ]
+                else:
+                    # 'webm' → rohe WebM-Datei, kein Konvertierungs-Postprozessor.
+                    # EmbedThumbnail entfernen: WebM wird von yt-dlp nicht unterstützt
+                    # (nur mp3, mkv/mka, ogg/opus/flac, m4a/mp4/m4v/mov).
+                    opts['postprocessors'] = [
+                        p for p in pps if p.get('key') != 'EmbedThumbnail'
+                    ]
+                    opts.pop('writethumbnail', None)
 
             self.root.after(0, lambda: self.set_status("Download läuft...", True))
 
@@ -2336,7 +2575,21 @@ class YouTubeDownloaderApp:
                         info = ydl.extract_info(url)
                         done.append(info.get('title', url))
                     _rename_after_download(final_path_ref, known_names_custom)
+                    # Opus-Thumbnail nachträglich als kleines JPEG einbetten
+                    if (item_opts.get('_opus_embed_ffmpeg')
+                            and final_path_ref[0]
+                            and final_path_ref[0].lower().endswith('.opus')):
+                        _embed_thumbnail_as_jpeg(
+                            final_path_ref[0], item_opts['_opus_embed_ffmpeg'])
+                    # MP3-Thumbnail: ebenfalls als kleines JPEG einbetten
+                    elif (item_opts.get('_mp3_embed_ffmpeg')
+                            and final_path_ref[0]
+                            and final_path_ref[0].lower().endswith('.mp3')):
+                        _embed_thumbnail_as_jpeg(
+                            final_path_ref[0], item_opts['_mp3_embed_ffmpeg'])
                 except Exception as e:
+                    if self._cancel_flag:
+                        break
                     messagebox.showerror("Fehler", f"Fehler:\n{e}")
             self._set_download_active(False)
 
