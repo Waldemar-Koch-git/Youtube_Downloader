@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-__version__ = '4.30.0 beta'
+__version__ = '4.30.1 beta'
 
 """
 YouTube Downloader GUI
@@ -583,7 +583,7 @@ class PlaylistDialog(_BaseSelectionDialog):
 
     # Hintergrundfarben
     _BG_NORMAL     = ''          # leer = Theme-Standard
-    _BG_DOWNLOADED = '#c8f0c8'   # hellgrün
+    _BG_DOWNLOADED = 'white'     #'#c8f0c8'   # hellgrün
     _BG_UNAVAIL    = ''          # bleibt Standard, Schrift rot
 
     def __init__(self, parent, entries: list,
@@ -611,22 +611,41 @@ class PlaylistDialog(_BaseSelectionDialog):
         n_dl = sum(1 for e in self._entries if not _is_unavailable_entry(e))
         n_done = sum(
             1 for e in self._entries
-            if self._is_downloaded(e) and not _is_unavailable_entry(e))
-        lbl = f"📋  {len(self._entries)} Einträge"
+            if self._is_downloaded(e) and not _is_unavailable_entry(e)
+        )
+
+        # Basis-Text
+        base_text = f"📋  {len(self._entries)} Einträge"
+        ttk.Label(
+            head,
+            text=base_text,
+            font=('Segoe UI', 11, 'bold')
+        ).pack(side='left')
+
         if n_done:
-            lbl += f"  •  ✅ {n_done} bereits vorhanden"
-        ttk.Label(head, text=lbl,
-                  font=('Segoe UI', 11, 'bold')).pack(side='left')
+            ttk.Label(
+                head,
+                text=f"  •  ✅ {n_done} bereits vorhanden",
+                foreground="blue",
+                font=('Segoe UI', 11, 'bold')
+            ).pack(side='left')
+
+        # Buttons rechts
         sel_frame = ttk.Frame(head)
         sel_frame.pack(side='right')
+
         for lbl2, cmd, w in [
-            ("Alle",               self._all,                 8),
-            ("Keine",              self._none,                8),
-            ("Umkehren",           self._invert,              9),
+            ("Alle",                self._all,                  8),
+            ("Keine",               self._none,                 8),
+            ("Umkehren",            self._invert,               9),
             ("✅ Nur Downloadbare", self._select_downloadable, 18),
         ]:
-            ttk.Button(sel_frame, text=lbl2, width=w,
-                       command=cmd).pack(side='left', padx=2)
+            ttk.Button(
+                sel_frame,
+                text=lbl2,
+                width=w,
+                command=cmd
+            ).pack(side='left', padx=2)
 
     def _is_downloaded(self, entry: dict) -> set:
         """
@@ -685,11 +704,11 @@ class PlaylistDialog(_BaseSelectionDialog):
             dur_s = f"  [{int(dur//60)}:{int(dur%60):02d}]" if dur else ""
 
             if is_bad:
-                text_color = '#CC0000'
+                text_color = 'red' # '#CC0000'
                 icon   = ''
                 suffix = '  ⚠ nicht verfügbar'
             elif is_done:
-                text_color = '#1a6b1a'
+                text_color = 'blue' # '#1a6b1a'
                 # Beide, nur Audio, nur Video
                 if 'audio' in is_done and 'video' in is_done:
                     icon = '  🎵🎬'
