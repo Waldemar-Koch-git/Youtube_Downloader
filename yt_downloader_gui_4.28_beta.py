@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-__version__ = '4.25.0 beta'
+__version__ = '4.28.0 beta'
 
 """
 YouTube Downloader GUI
@@ -12,6 +12,8 @@ License: MIT
 """
 # pip install imageio-ffmpeg yt-dlp
 
+import os
+import re
 import threading
 import imageio_ffmpeg as ffmpeg
 import yt_dlp
@@ -47,6 +49,88 @@ MODES = [
     ("⭐ Video (Best)",      "video_best"),
 ]
 MODES_DICT = dict(MODES)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Konfigurationsdatei  (yt_d_config.txt  –  neben der .py-Datei)
+# ═════════════════════════════════════════════════════════════════════════════
+
+_CONFIG_FILE = path.join(path.dirname(path.abspath(__file__)), 'yt_d_config.txt')
+
+# Schlüssel → (Typ, Standardwert)
+# Typen: 'str' | 'bool' | 'int'
+_CONFIG_SCHEMA: dict[str, tuple[str, object]] = {
+    'audio_path':         ('str',  ''),
+    'video_path':         ('str',  ''),
+    'audio_to_mp3':       ('bool', True),
+    'audio_format':       ('str',  'mp3'),
+    'video_to_mp4':       ('bool', True),
+    'mp3_bitrate':        ('str',  '320'),
+    'open_folder':        ('bool', False),
+    'write_tags':         ('bool', True),
+    'write_thumbnail':    ('bool', True),
+    'cookies_browser':    ('str',  ''),
+}
+
+
+def _config_load() -> dict:
+    """
+    Liest yt_d_config.txt und gibt ein Dict mit allen Einstellungen zurück.
+    Fehlende Schlüssel werden mit dem Standardwert aus _CONFIG_SCHEMA aufgefüllt.
+    Zeilen mit '#' am Anfang werden ignoriert.
+    Format pro Zeile:  schlüssel = wert
+    """
+    result = {k: v for k, (_, v) in _CONFIG_SCHEMA.items()}
+    if not path.exists(_CONFIG_FILE):
+        return result
+    try:
+        with open(_CONFIG_FILE, 'r', encoding='utf-8') as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith('#') or '=' not in line:
+                    continue
+                key, _, raw = line.partition('=')
+                key = key.strip()
+                raw = raw.strip()
+                if key not in _CONFIG_SCHEMA:
+                    continue
+                typ, _ = _CONFIG_SCHEMA[key]
+                if typ == 'bool':
+                    result[key] = raw.lower() in ('1', 'true', 'yes', 'ja')
+                elif typ == 'int':
+                    try:
+                        result[key] = int(raw)
+                    except ValueError:
+                        pass
+                else:
+                    result[key] = raw
+    except OSError:
+        pass
+    return result
+
+
+def _config_save(cfg: dict):
+    """
+    Schreibt alle Einstellungen aus *cfg* in yt_d_config.txt.
+    Unbekannte Schlüssel werden ignoriert.
+    """
+    lines = [
+        '# YouTube Downloader – Konfigurationsdatei',
+        '# Automatisch generiert. Manuelle Änderungen sind erlaubt.',
+        '# Format:  schlüssel = wert',
+        '# Bool-Werte: true / false',
+        '',
+    ]
+    for key, (typ, default) in _CONFIG_SCHEMA.items():
+        val = cfg.get(key, default)
+        if typ == 'bool':
+            val = 'true' if val else 'false'
+        lines.append(f'{key} = {val}')
+    try:
+        with open(_CONFIG_FILE, 'w', encoding='utf-8') as fh:
+            fh.write('\n'.join(lines) + '\n')
+    except OSError:
+        pass
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -94,7 +178,6 @@ def _scan_existing_stems(folder: str) -> set:
     Gibt ein Set aller Dateinamen (ohne Extension) zurück, die im *folder* liegen.
     Wird einmalig beim Download-Start aufgerufen.
     """
-    import os
     stems: set = set()
     try:
         for entry in os.scandir(folder):
@@ -133,8 +216,6 @@ def _resolve_outtmpl_unique(url: str, base_opts: dict, known_names: set) -> dict
     Holt den Videotitel vorab (download=False), berechnet daraus einen
     eindeutigen Ziel-Dateinamen und setzt diesen als fixen outtmpl.
     """
-    import os, re
-
     info_opts = dict(base_opts)
     info_opts['extract_flat'] = False
     info_opts['skip_download'] = True
@@ -206,7 +287,6 @@ def _rename_after_download(final_path_ref: list, known_names: set):
     Trägt den fertigen Dateinamen in known_names ein.
     Sucht bei Extension-Wechsel (z.B. webm→mp3) nach dem tatsächlichen File.
     """
-    import os
     fp = final_path_ref[0]
     if not fp:
         return
@@ -337,56 +417,62 @@ def _attach_scroll(canvas: 'Canvas'):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  PlaylistDialog
+#  _BaseSelectionDialog  –  gemeinsame Basis für Playlist- und MultiURL-Dialog
 # ═════════════════════════════════════════════════════════════════════════════
-class PlaylistDialog(Toplevel):
+class _BaseSelectionDialog(Toplevel):
     """
-    Zeigt alle (bereits deduplizierten) Einträge einer Playlist.
-    Ergebnis: dict {'indices': [...], 'mode': str, 'bitrate': str} oder None.
+    Abstrakte Basis: scrollbare Auswahlliste + Download-Einstellungen + Footer.
+    Subklassen implementieren _build_header() und _populate_rows(inner).
     """
 
-    def __init__(self, parent, entries: list,
-                 default_mode: str = "audio_mp3",
-                 default_bitrate: str = "320",
-                 title_prefix: str = "Playlist"):
+    def __init__(self, parent, default_mode: str, default_bitrate: str,
+                 title: str, geometry: tuple, minsize: tuple,
+                 use_max_bitrate: bool = False):
         super().__init__(parent)
-        self.title(f"{title_prefix} – Auswahl & Download-Einstellungen")
+        self.title(title)
         self.resizable(True, True)
         self.grab_set()
         self.result = None
-        self.configure(background='white')
 
         sw, sh = parent.winfo_screenwidth(), parent.winfo_screenheight()
-        w = min(980, sw - 60)
-        h = min(720, sh - 80)
+        w, h, min_w, min_h = *geometry, *minsize
+        w = min(w, sw - 60)
+        h = min(h, sh - 80)
         self.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
-        self.minsize(700, 380)
+        self.minsize(min_w, min_h)
 
-        self._entries     = entries
         self._vars: list[BooleanVar] = []
-        self._mode_var    = StringVar(value=default_mode)
-        self._bitrate_var = StringVar(value=default_bitrate)
-        self._use_max_bitrate = BooleanVar(value=True)
-
+        self._mode_var        = StringVar(value=default_mode)
+        self._bitrate_var     = StringVar(value=default_bitrate)
+        self._use_max_bitrate = BooleanVar(value=use_max_bitrate)
         self._build()
 
+    # ── Subklassen überschreiben diese zwei Methoden ──────────────────────────
+
+    def _build_header(self, head: ttk.Frame):
+        """Kopfzeile mit Titel und Auswahl-Buttons befüllen."""
+        raise NotImplementedError
+
+    def _populate_rows(self, inner: ttk.Frame):
+        """Eintragszeilen in den scrollbaren Innenbereich schreiben."""
+        raise NotImplementedError
+
+    # ── Gemeinsamer Aufbau ────────────────────────────────────────────────────
+
     def _build(self):
+        _bg = ttk.Style().lookup('TFrame', 'background') or '#d9d9d9'
+        self.configure(background=_bg)
+
+        # Header
         head = ttk.Frame(self, padding=(12, 8))
         head.pack(fill='x')
-        ttk.Label(head, text=f"📋  {len(self._entries)} Einträge",
-                  font=('Segoe UI', 11, 'bold')).pack(side='left')
-        sel_frame = ttk.Frame(head)
-        sel_frame.pack(side='right')
-        for lbl, cmd, w in [("Alle", self._all, 8), ("Keine", self._none, 8),
-                             ("Umkehren", self._invert, 9),
-                             ("✅ Nur Downloadbare", self._select_downloadable, 18)]:
-            ttk.Button(sel_frame, text=lbl, width=w,
-                       command=cmd).pack(side='left', padx=2)
+        self._build_header(head)
         ttk.Separator(self).pack(fill='x')
 
+        # Scrollbare Liste
         lf = ttk.Frame(self)
         lf.pack(fill='both', expand=True, padx=8, pady=4)
-        canvas = Canvas(lf, borderwidth=0, highlightthickness=0)
+        canvas = Canvas(lf, borderwidth=0, highlightthickness=0, background=_bg)
         vsb = ttk.Scrollbar(lf, orient='vertical', command=canvas.yview)
         canvas.configure(yscrollcommand=vsb.set)
         vsb.pack(side='right', fill='y')
@@ -398,28 +484,13 @@ class PlaylistDialog(Toplevel):
         canvas.bind('<Configure>',
                     lambda e: canvas.itemconfig(inner_id, width=e.width))
         _attach_scroll(canvas)
-
-        for i, entry in enumerate(self._entries):
-            title  = entry.get('title') or f'Eintrag {i+1}'
-            is_bad = _is_unavailable_entry(entry)
-            var = BooleanVar(value=not is_bad)
-            self._vars.append(var)
-            row = ttk.Frame(inner)
-            row.pack(fill='x', padx=4, pady=1)
-            ttk.Checkbutton(row, variable=var).pack(side='left')
-            ttk.Label(row, text=f"{i+1:>3}.", width=4,
-                      font=('Segoe UI', 9), foreground='#888').pack(side='left')
-            dur   = entry.get('duration') or 0
-            dur_s = f"  [{int(dur//60)}:{int(dur%60):02d}]" if dur else ""
-            fg     = '#CC0000' if is_bad else 'black'
-            suffix = '  ⚠ nicht verfügbar' if is_bad else ''
-            ttk.Label(row, text=f"{title}{dur_s}{suffix}",
-                      font=('Segoe UI', 9), anchor='w', foreground=fg).pack(
-                          side='left', fill='x', expand=True, padx=(4, 0))
+        self._populate_rows(inner)
 
         ttk.Separator(self).pack(fill='x', pady=(4, 0))
 
-        cfg = ttk.LabelFrame(self,
+        # Download-Einstellungen
+        cfg = ttk.LabelFrame(
+            self,
             text="Download-Einstellungen (gilt für alle ausgewählten Einträge)",
             padding=(12, 6))
         cfg.pack(fill='x', padx=8, pady=6)
@@ -430,27 +501,28 @@ class PlaylistDialog(Toplevel):
             ttk.Radiobutton(mode_row, text=label, variable=self._mode_var,
                             value=key,
                             command=self._toggle_bitrate).pack(side='left', padx=6)
-        self._br_frame = ttk.Frame(cfg)
-        self._br_frame.pack(fill='x', pady=(4, 0))
-        self._br_label = ttk.Label(self._br_frame, text="Bitrate:", width=10)
+        br_row = ttk.Frame(cfg)
+        br_row.pack(fill='x', pady=(4, 0))
+        self._br_label = ttk.Label(br_row, text="MP3-Bitrate:", width=10)
         self._br_label.pack(side='left')
         self._br_combo = ttk.Combobox(
-            self._br_frame, textvariable=self._bitrate_var,
+            br_row, textvariable=self._bitrate_var,
             values=["320", "256", "192", "160", "128", "96", "64"],
             width=7, state='readonly', style='Bitrate.TCombobox')
         self._br_combo.pack(side='left', padx=(0, 2))
-        ttk.Label(self._br_frame, text="kbps",
+        ttk.Label(br_row, text="kbps",
                   font=('Segoe UI', 9), foreground='#666').pack(side='left')
-        ttk.Radiobutton(self._br_frame, text="Feste Bitrate",
+        ttk.Radiobutton(br_row, text="Feste Bitrate",
                         variable=self._use_max_bitrate, value=False,
                         command=self._toggle_bitrate).pack(side='left', padx=(14, 2))
-        ttk.Radiobutton(self._br_frame, text="Max. Bitrate (automatisch je Datei)",
+        ttk.Radiobutton(br_row, text="Max. Bitrate (automatisch je Datei)",
                         variable=self._use_max_bitrate, value=True,
                         command=self._toggle_bitrate).pack(side='left', padx=(2, 0))
         self._toggle_bitrate()
 
         ttk.Separator(self).pack(fill='x')
 
+        # Footer
         foot = ttk.Frame(self, padding=(10, 8))
         foot.pack(fill='x')
         self._count_var = StringVar()
@@ -463,6 +535,8 @@ class PlaylistDialog(Toplevel):
                    command=self._cancel).pack(side='right', padx=(6, 0))
         ttk.Button(foot, text="✔ Ausgewählte herunterladen",
                    style='Action.TButton', command=self._ok).pack(side='right')
+
+    # ── Shared-Logik ──────────────────────────────────────────────────────────
 
     def _toggle_bitrate(self):
         mode = self._mode_var.get()
@@ -482,8 +556,73 @@ class PlaylistDialog(Toplevel):
     def _none(self):   [v.set(False) for v in self._vars]
     def _invert(self): [v.set(not v.get()) for v in self._vars]
 
+    def _cancel(self):
+        self.result = None
+        self.destroy()
+
+    def _ok(self):
+        raise NotImplementedError
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  PlaylistDialog
+# ═════════════════════════════════════════════════════════════════════════════
+class PlaylistDialog(_BaseSelectionDialog):
+    """
+    Zeigt alle (bereits deduplizierten) Einträge einer Playlist.
+    Ergebnis: dict {'indices': [...], 'mode': str, 'bitrate': str} oder None.
+    """
+
+    def __init__(self, parent, entries: list,
+                 default_mode: str = "audio_mp3",
+                 default_bitrate: str = "320",
+                 title_prefix: str = "Playlist"):
+        self._entries = entries
+        super().__init__(
+            parent,
+            default_mode=default_mode,
+            default_bitrate=default_bitrate,
+            title=f"{title_prefix} – Auswahl & Download-Einstellungen",
+            geometry=(980, 720),
+            minsize=(700, 380),
+            use_max_bitrate=True,
+        )
+
+    def _build_header(self, head: ttk.Frame):
+        ttk.Label(head, text=f"📋  {len(self._entries)} Einträge",
+                  font=('Segoe UI', 11, 'bold')).pack(side='left')
+        sel_frame = ttk.Frame(head)
+        sel_frame.pack(side='right')
+        for lbl, cmd, w in [
+            ("Alle",               self._all,                 8),
+            ("Keine",              self._none,                8),
+            ("Umkehren",           self._invert,              9),
+            ("✅ Nur Downloadbare", self._select_downloadable, 18),
+        ]:
+            ttk.Button(sel_frame, text=lbl, width=w,
+                       command=cmd).pack(side='left', padx=2)
+
+    def _populate_rows(self, inner: ttk.Frame):
+        for i, entry in enumerate(self._entries):
+            title  = entry.get('title') or f'Eintrag {i+1}'
+            is_bad = _is_unavailable_entry(entry)
+            var = BooleanVar(value=not is_bad)
+            self._vars.append(var)
+            row = ttk.Frame(inner)
+            row.pack(fill='x', padx=4, pady=1)
+            ttk.Checkbutton(row, variable=var).pack(side='left')
+            ttk.Label(row, text=f"{i+1:>3}.", width=4,
+                      font=('Segoe UI', 9), foreground='#888').pack(side='left')
+            dur   = entry.get('duration') or 0
+            dur_s = f"  [{int(dur//60)}:{int(dur%60):02d}]" if dur else ""
+            ttk.Label(
+                row,
+                text=f"{title}{dur_s}{'  ⚠ nicht verfügbar' if is_bad else ''}",
+                font=('Segoe UI', 9), anchor='w',
+                foreground='#CC0000' if is_bad else 'black',
+            ).pack(side='left', fill='x', expand=True, padx=(4, 0))
+
     def _select_downloadable(self):
-        """Wählt nur Einträge aus, die voraussichtlich downloadbar sind."""
         for var, entry in zip(self._vars, self._entries):
             var.set(not _is_unavailable_entry(entry))
 
@@ -498,15 +637,11 @@ class PlaylistDialog(Toplevel):
                        'bitrate': bitrate}
         self.destroy()
 
-    def _cancel(self):
-        self.result = None
-        self.destroy()
-
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  MultiURLDialog
 # ═════════════════════════════════════════════════════════════════════════════
-class MultiURLDialog(Toplevel):
+class MultiURLDialog(_BaseSelectionDialog):
     """
     Zeigt alle eingegebenen URLs in einer Vorschau-Liste.
     Ergebnis: dict {'urls': [...], 'mode': str, 'bitrate': str} oder None.
@@ -515,27 +650,18 @@ class MultiURLDialog(Toplevel):
     def __init__(self, parent, urls: list,
                  default_mode: str = "audio_mp3",
                  default_bitrate: str = "320"):
-        super().__init__(parent)
-        self.title("Multi-URL – Auswahl & Download-Einstellungen")
-        self.resizable(True, True)
-        self.grab_set()
-        self.result = None
+        self._urls = urls
+        super().__init__(
+            parent,
+            default_mode=default_mode,
+            default_bitrate=default_bitrate,
+            title="Multi-URL – Auswahl & Download-Einstellungen",
+            geometry=(860, 640),
+            minsize=(560, 360),
+            use_max_bitrate=False,
+        )
 
-        sw, sh = parent.winfo_screenwidth(), parent.winfo_screenheight()
-        w = min(860, sw - 60)
-        h = min(640, sh - 80)
-        self.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
-        self.minsize(560, 360)
-
-        self._urls   = urls
-        self._vars: list[BooleanVar] = []
-        self._mode_var    = StringVar(value=default_mode)
-        self._bitrate_var = StringVar(value=default_bitrate)
-        self._build()
-
-    def _build(self):
-        head = ttk.Frame(self, padding=(12, 8))
-        head.pack(fill='x')
+    def _build_header(self, head: ttk.Frame):
         ttk.Label(head, text=f"🔗  {len(self._urls)} URLs erkannt",
                   font=('Segoe UI', 11, 'bold')).pack(side='left')
         sel_frame = ttk.Frame(head)
@@ -544,23 +670,8 @@ class MultiURLDialog(Toplevel):
                          ("Umkehren", self._invert)]:
             ttk.Button(sel_frame, text=lbl, width=8,
                        command=cmd).pack(side='left', padx=2)
-        ttk.Separator(self).pack(fill='x')
 
-        lf = ttk.Frame(self)
-        lf.pack(fill='both', expand=True, padx=8, pady=4)
-        canvas = Canvas(lf, borderwidth=0, highlightthickness=0)
-        vsb = ttk.Scrollbar(lf, orient='vertical', command=canvas.yview)
-        canvas.configure(yscrollcommand=vsb.set)
-        vsb.pack(side='right', fill='y')
-        canvas.pack(side='left', fill='both', expand=True)
-        inner = ttk.Frame(canvas)
-        inner_id = canvas.create_window((0, 0), window=inner, anchor='nw')
-        inner.bind('<Configure>',
-                   lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
-        canvas.bind('<Configure>',
-                    lambda e: canvas.itemconfig(inner_id, width=e.width))
-        _attach_scroll(canvas)
-
+    def _populate_rows(self, inner: ttk.Frame):
         for i, url in enumerate(self._urls):
             var = BooleanVar(value=True)
             self._vars.append(var)
@@ -573,60 +684,6 @@ class MultiURLDialog(Toplevel):
                       foreground='#1565C0').pack(
                           side='left', fill='x', expand=True, padx=(4, 0))
 
-        ttk.Separator(self).pack(fill='x', pady=(4, 0))
-
-        cfg = ttk.LabelFrame(self, text="Download-Einstellungen", padding=(12, 6))
-        cfg.pack(fill='x', padx=8, pady=6)
-        mode_row = ttk.Frame(cfg)
-        mode_row.pack(fill='x')
-        ttk.Label(mode_row, text="Modus:", width=10).pack(side='left')
-        for label, key in MODES:
-            ttk.Radiobutton(mode_row, text=label, variable=self._mode_var,
-                            value=key, command=self._toggle_bitrate).pack(side='left', padx=6)
-        self._br_frame = ttk.Frame(cfg)
-        self._br_frame.pack(fill='x', pady=(4, 0))
-        self._br_label = ttk.Label(self._br_frame, text="Bitrate:", width=10)
-        self._br_label.pack(side='left')
-        self._br_combo = ttk.Combobox(
-            self._br_frame, textvariable=self._bitrate_var,
-            values=["320", "256", "192", "160", "128", "96", "64"],
-            width=7, state='readonly')
-        self._br_combo.pack(side='left', padx=(0, 4))
-        ttk.Label(self._br_frame, text="kbps",
-                  font=('Segoe UI', 9), foreground='#666').pack(side='left')
-        self._toggle_bitrate()
-        ttk.Separator(self).pack(fill='x')
-
-        foot = ttk.Frame(self, padding=(10, 8))
-        foot.pack(fill='x')
-        self._count_var = StringVar()
-        self._upd_count()
-        ttk.Label(foot, textvariable=self._count_var,
-                  font=('Segoe UI', 9), foreground='#555').pack(side='left')
-        for v in self._vars:
-            v.trace_add('write', lambda *_: self._upd_count())
-        ttk.Button(foot, text="✕ Abbrechen",
-                   command=self._cancel).pack(side='right', padx=(6, 0))
-        ttk.Button(foot, text="✔ Ausgewählte herunterladen",
-                   style='Action.TButton', command=self._ok).pack(side='right')
-
-    def _toggle_bitrate(self):
-        mode = self._mode_var.get()
-        if mode in ('audio_mp3', 'audio_opus'):
-            self._br_combo.configure(state='readonly')
-            self._br_label.configure(
-                text="MP3-Bitrate:" if mode == 'audio_mp3' else "Opus-Bitrate:")
-        else:
-            self._br_combo.configure(state='disabled')
-
-    def _upd_count(self):
-        n = sum(v.get() for v in self._vars)
-        self._count_var.set(f"{n} von {len(self._vars)} ausgewählt")
-
-    def _all(self):    [v.set(True)  for v in self._vars]
-    def _none(self):   [v.set(False) for v in self._vars]
-    def _invert(self): [v.set(not v.get()) for v in self._vars]
-
     def _ok(self):
         sel = [self._urls[i] for i, v in enumerate(self._vars) if v.get()]
         if not sel:
@@ -635,10 +692,6 @@ class MultiURLDialog(Toplevel):
             return
         self.result = {'urls': sel, 'mode': self._mode_var.get(),
                        'bitrate': self._bitrate_var.get()}
-        self.destroy()
-
-    def _cancel(self):
-        self.result = None
         self.destroy()
 
 
@@ -677,12 +730,9 @@ class YouTubeDownloaderApp:
         self._video_formats: list = []
         self._audio_formats: list = []
         self._progress_pct = DoubleVar(value=0.0)
-        self._advanced_expanded      = False
-        self._playlist_expanded      = False
-        self._saveopts_expanded      = False
-        self._quickdownload_expanded = False
 
         # Popup-Synchronisation (GUI-Thread ↔ Download-Thread)
+        self._pending_playlist: dict | None = None
         self._playlist_event:  threading.Event | None = None
         self._playlist_result: dict | None = None
         self._playlist_cancel: bool = False
@@ -693,11 +743,13 @@ class YouTubeDownloaderApp:
         self._cancel_flag:  bool = False
         self._download_active: bool = False
 
-        self._pending_playlist: dict | None = None
-
         parent_dir = path.dirname(path.abspath(__file__))
         self.audio_path_var.set(path.join(parent_dir, "Downloads", "audio"))
         self.video_path_var.set(path.join(parent_dir, "Downloads", "video"))
+
+        # ── Konfiguration laden ───────────────────────────────────────────────
+        self._cfg = _config_load()
+        self._apply_config(self._cfg)
 
         self.setup_styles()
         self._build_scrollable_shell()
@@ -750,6 +802,43 @@ class YouTubeDownloaderApp:
             cur_w    = self.root.winfo_width() or self.ui_WEITE
             self.root.geometry(f"{cur_w}x{new_h}")
             self._initial_size_set = True
+
+    # ─────────────────────────────────────────────────────────────────────────
+    def _apply_config(self, cfg: dict):
+        """Überträgt geladene Konfigurationswerte auf die Tkinter-Variablen."""
+        parent_dir = path.dirname(path.abspath(__file__))
+        default_audio = path.join(parent_dir, "Downloads", "audio")
+        default_video = path.join(parent_dir, "Downloads", "video")
+
+        self.audio_path_var.set(cfg.get('audio_path') or default_audio)
+        self.video_path_var.set(cfg.get('video_path') or default_video)
+        self.audio_to_mp3_var.set(cfg.get('audio_to_mp3', True))
+        self.audio_format_var.set(cfg.get('audio_format', 'mp3'))
+        self.video_to_mp4_var.set(cfg.get('video_to_mp4', True))
+        self.mp3_bitrate_var.set(cfg.get('mp3_bitrate', '320'))
+        self.open_folder_var.set(cfg.get('open_folder', False))
+        self.write_tags_var.set(cfg.get('write_tags', True))
+        self.write_thumbnail_var.set(cfg.get('write_thumbnail', True))
+        self.cookies_browser_var.set(cfg.get('cookies_browser', ''))
+
+    def _collect_config(self) -> dict:
+        """Liest alle aktuellen Einstellungen aus den Tkinter-Variablen."""
+        return {
+            'audio_path':      self.audio_path_var.get(),
+            'video_path':      self.video_path_var.get(),
+            'audio_to_mp3':    self.audio_to_mp3_var.get(),
+            'audio_format':    self.audio_format_var.get(),
+            'video_to_mp4':    self.video_to_mp4_var.get(),
+            'mp3_bitrate':     self.mp3_bitrate_var.get(),
+            'open_folder':     self.open_folder_var.get(),
+            'write_tags':      self.write_tags_var.get(),
+            'write_thumbnail': self.write_thumbnail_var.get(),
+            'cookies_browser': self.cookies_browser_var.get(),
+        }
+
+    def _save_config(self, *_):
+        """Speichert alle aktuellen Einstellungen sofort in yt_d_config.txt."""
+        _config_save(self._collect_config())
 
     # ─────────────────────────────────────────────────────────────────────────
     def setup_styles(self):
@@ -883,7 +972,11 @@ class YouTubeDownloaderApp:
 
         self._qd_frame = ttk.LabelFrame(mf, text="", padding="10")
         self._qd_frame.columnconfigure(0, weight=1)
-        self._qd_grid_row = r
+        self._sec_qd = {
+            'expanded': False, 'frame': self._qd_frame,
+            'grid_row': r, 'lbl_var': self._qd_toggle_lbl,
+            'icon_text': "⚡ Schnell-Download", 'pady': (0, 8),
+        }
         r += 1
 
         btn_row = ttk.Frame(self._qd_frame)
@@ -922,7 +1015,11 @@ class YouTubeDownloaderApp:
 
         self._pl_frame = ttk.LabelFrame(mf, text="", padding="10")
         self._pl_frame.columnconfigure(0, weight=1)
-        self._pl_grid_row = r
+        self._sec_pl = {
+            'expanded': False, 'frame': self._pl_frame,
+            'grid_row': r, 'lbl_var': self._pl_toggle_lbl,
+            'icon_text': "📋 Playlist-Verwaltung", 'pady': (0, 8),
+        }
         r += 1
 
         pl_btn_row = ttk.Frame(self._pl_frame)
@@ -961,7 +1058,11 @@ class YouTubeDownloaderApp:
         self._adv_frame = ttk.LabelFrame(mf, text="", padding="10")
         self._adv_frame.columnconfigure(0, weight=3)
         self._adv_frame.columnconfigure(1, weight=1)
-        self._adv_grid_row = r
+        self._sec_adv = {
+            'expanded': False, 'frame': self._adv_frame,
+            'grid_row': r, 'lbl_var': self._adv_toggle_lbl,
+            'icon_text': "Erweiterte Optionen (Einzelvideo)", 'pady': (0, 10),
+        }
         r += 1
 
         ttk.Label(self._adv_frame, text="Video Stream:",
@@ -1022,22 +1123,29 @@ class YouTubeDownloaderApp:
 
         self._so_frame = ttk.LabelFrame(mf, text="", padding="10")
         self._so_frame.columnconfigure(1, weight=1)
-        self._so_grid_row = r
+        self._sec_so = {
+            'expanded': False, 'frame': self._so_frame,
+            'grid_row': r, 'lbl_var': self._so_toggle_lbl,
+            'icon_text': "💾 Speicherorte & Optionen", 'pady': (0, 10),
+        }
         r += 1
 
-        ttk.Label(self._so_frame, text="Audio:").grid(row=0, column=0, sticky='w', pady=3)
-        ttk.Entry(self._so_frame, textvariable=self.audio_path_var,
-                  width=54).grid(row=0, column=1, padx=(8, 8), sticky='ew')
-        ttk.Button(self._so_frame, text="📁 Durchsuchen",
-                   command=lambda: self.browse_folder('audio'),
-                   style='Secondary.TButton').grid(row=0, column=2)
+        def _path_row(grid_row: int, label: str, path_var: StringVar, kind: str):
+            ttk.Label(self._so_frame, text=label).grid(
+                row=grid_row, column=0, sticky='w', pady=3)
+            ttk.Entry(self._so_frame, textvariable=path_var,
+                      width=50).grid(row=grid_row, column=1, padx=(8, 4), sticky='ew')
+            btn_frame = ttk.Frame(self._so_frame)
+            btn_frame.grid(row=grid_row, column=2, sticky='w')
+            ttk.Button(btn_frame, text="📁 Durchsuchen",
+                       command=lambda k=kind: self.browse_folder(k),
+                       style='Secondary.TButton').pack(side='left')
+            ttk.Button(btn_frame, text="🗂 Öffnen",
+                       command=lambda v=path_var: self._open_folder_direct(v.get()),
+                       style='Secondary.TButton').pack(side='left', padx=(4, 0))
 
-        ttk.Label(self._so_frame, text="Video:").grid(row=1, column=0, sticky='w', pady=3)
-        ttk.Entry(self._so_frame, textvariable=self.video_path_var,
-                  width=54).grid(row=1, column=1, padx=(8, 8), sticky='ew')
-        ttk.Button(self._so_frame, text="📁 Durchsuchen",
-                   command=lambda: self.browse_folder('video'),
-                   style='Secondary.TButton').grid(row=1, column=2)
+        _path_row(0, "Audio:", self.audio_path_var, 'audio')
+        _path_row(1, "Video:", self.video_path_var, 'video')
 
         opt_row = ttk.Frame(self._so_frame)
         opt_row.grid(row=2, column=0, columnspan=3, sticky='w', pady=(8, 2))
@@ -1062,6 +1170,16 @@ class YouTubeDownloaderApp:
                   style='Info.TLabel').pack(side='left')
 
         self.root.after(0, lambda: self._toggle_quickdownload(force_open=True))
+
+        # ── Einstellungen automatisch speichern ───────────────────────────────
+        for var in (
+            self.audio_path_var, self.video_path_var,
+            self.audio_to_mp3_var, self.audio_format_var,
+            self.video_to_mp4_var, self.mp3_bitrate_var,
+            self.open_folder_var, self.write_tags_var,
+            self.write_thumbnail_var, self.cookies_browser_var,
+        ):
+            var.trace_add('write', self._save_config)
 
     # ═════════════════════════════════════════════════════════════════════════
     #  UI-Hilfsmethoden
@@ -1122,61 +1240,37 @@ class YouTubeDownloaderApp:
         self._pause_event.wait()
         return self._cancel_flag
 
-    def _toggle_advanced(self, force_open: bool = False):
-        if force_open and self._advanced_expanded:
+    # ── Generischer Klapp-Mechanismus ─────────────────────────────────────────
+    # Jede Sektion ist ein Dict:
+    #   {'expanded': bool, 'frame': widget, 'grid_row': int,
+    #    'lbl_var': StringVar, 'icon_text': str, 'pady': tuple}
+    # Die vier _toggle_*-Wrapper bleiben als schmale Aliase erhalten,
+    # damit bestehende call-sites unverändert funktionieren.
+
+    def _toggle_section(self, sec: dict, force_open: bool = False):
+        if force_open and sec['expanded']:
             return
-        self._advanced_expanded = force_open or (not self._advanced_expanded)
-        if self._advanced_expanded:
-            self._adv_frame.grid(row=self._adv_grid_row, column=0,
-                                 sticky='ew', pady=(0, 10), in_=self._mf)
-            self._adv_toggle_lbl.set(
-                "▼  Erweiterte Optionen (Einzelvideo)  –  zum Einklappen klicken")
+        sec['expanded'] = force_open or (not sec['expanded'])
+        arrow = "▼" if sec['expanded'] else "▶"
+        action = "zum Einklappen" if sec['expanded'] else "zum Aufklappen"
+        sec['lbl_var'].set(f"{arrow}  {sec['icon_text']}  –  {action} klicken")
+        if sec['expanded']:
+            sec['frame'].grid(row=sec['grid_row'], column=0,
+                              sticky='ew', pady=sec['pady'], in_=self._mf)
         else:
-            self._adv_frame.grid_remove()
-            self._adv_toggle_lbl.set(
-                "▶  Erweiterte Optionen (Einzelvideo)  –  zum Aufklappen klicken")
+            sec['frame'].grid_remove()
+
+    def _toggle_advanced(self, force_open: bool = False):
+        self._toggle_section(self._sec_adv, force_open)
 
     def _toggle_playlist(self, force_open: bool = False):
-        if force_open and self._playlist_expanded:
-            return
-        self._playlist_expanded = force_open or (not self._playlist_expanded)
-        if self._playlist_expanded:
-            self._pl_frame.grid(row=self._pl_grid_row, column=0,
-                                sticky='ew', pady=(0, 8), in_=self._mf)
-            self._pl_toggle_lbl.set(
-                "▼  📋 Playlist-Verwaltung  –  zum Einklappen klicken")
-        else:
-            self._pl_frame.grid_remove()
-            self._pl_toggle_lbl.set(
-                "▶  📋 Playlist-Verwaltung  –  zum Aufklappen klicken")
+        self._toggle_section(self._sec_pl, force_open)
 
     def _toggle_saveopts(self, force_open: bool = False):
-        if force_open and self._saveopts_expanded:
-            return
-        self._saveopts_expanded = force_open or (not self._saveopts_expanded)
-        if self._saveopts_expanded:
-            self._so_frame.grid(row=self._so_grid_row, column=0,
-                                sticky='ew', pady=(0, 10), in_=self._mf)
-            self._so_toggle_lbl.set(
-                "▼  💾 Speicherorte & Optionen  –  zum Einklappen klicken")
-        else:
-            self._so_frame.grid_remove()
-            self._so_toggle_lbl.set(
-                "▶  💾 Speicherorte & Optionen  –  zum Aufklappen klicken")
+        self._toggle_section(self._sec_so, force_open)
 
     def _toggle_quickdownload(self, force_open: bool = False):
-        if force_open and self._quickdownload_expanded:
-            return
-        self._quickdownload_expanded = force_open or (not self._quickdownload_expanded)
-        if self._quickdownload_expanded:
-            self._qd_frame.grid(row=self._qd_grid_row, column=0,
-                                sticky='ew', pady=(0, 8), in_=self._mf)
-            self._qd_toggle_lbl.set(
-                "▼  ⚡ Schnell-Download  –  zum Einklappen klicken")
-        else:
-            self._qd_frame.grid_remove()
-            self._qd_toggle_lbl.set(
-                "▶  ⚡ Schnell-Download  –  zum Aufklappen klicken")
+        self._toggle_section(self._sec_qd, force_open)
 
     def _on_url_change(self, event=None):
         urls = self._get_urls()
@@ -1230,21 +1324,42 @@ class YouTubeDownloaderApp:
         if self.open_folder_var.get():
             Popen(f'explorer "{dest}"')
 
+    def _open_folder_direct(self, folder: str):
+        """Öffnet den angegebenen Ordner sofort im Explorer (erstellt ihn wenn nötig)."""
+        if not folder:
+            messagebox.showwarning("Kein Pfad", "Bitte zuerst einen Zielordner eingeben.")
+            return
+        self._ensure_dir(folder)
+        Popen(f'explorer "{os.path.normpath(folder)}"')
+
     # ═════════════════════════════════════════════════════════════════════════
     #  yt-dlp Basis-Optionen
     # ═════════════════════════════════════════════════════════════════════════
 
     def _base_opts(self) -> dict:
+        """
+        Minimale yt-dlp-Optionen – nur ffmpeg-Pfad und Cookies.
+        Wird bei Analyse UND Download verwendet.
+        Kein writethumbnail, keine Postprocessoren – damit die Analyse
+        keine Bilddateien auf die Platte schreibt.
+        """
         opts = {
             'ffmpeg_location': ffmpeg.get_ffmpeg_exe(),
             'quiet':       False,
             'no_warnings': False,
         }
-        # Cookies aus Browser (löst YouTube 429 / Bot-Erkennung)
         browser = self.cookies_browser_var.get().strip()
         if browser:
             opts['cookiesfrombrowser'] = (browser,)
+        return opts
 
+    def _download_opts(self) -> dict:
+        """
+        Erweiterte yt-dlp-Optionen für echte Downloads:
+        _base_opts() + Metadaten-Tags + Thumbnail einbetten (falls aktiviert).
+        Nur hier wird writethumbnail gesetzt – niemals bei der Analyse.
+        """
+        opts = self._base_opts()
         pps = []
         if self.write_tags_var.get():
             pps.append({
@@ -1644,7 +1759,7 @@ class YouTubeDownloaderApp:
 
     def _build_opts_for_mode(self, mode: str, bitrate: str) -> tuple[dict, str]:
         """Gibt (opts, dest) passend zum Modus zurück."""
-        opts = self._base_opts()
+        opts = self._download_opts()
 
         if mode == 'audio_mp3':
             dest = self.audio_path_var.get()
@@ -1982,7 +2097,7 @@ class YouTubeDownloaderApp:
                     else self.audio_path_var.get())
             self._ensure_dir(dest)
 
-            opts = self._base_opts()
+            opts = self._download_opts()
             opts.update({
                 'format': fmt_str,
                 'outtmpl': path.join(dest, '%(title)s.%(ext)s'),
