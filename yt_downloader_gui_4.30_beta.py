@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-__version__ = '4.28.0 beta'
+__version__ = '4.30.0 beta'
 
 """
 YouTube Downloader GUI
@@ -70,6 +70,8 @@ _CONFIG_SCHEMA: dict[str, tuple[str, object]] = {
     'write_tags':         ('bool', True),
     'write_thumbnail':    ('bool', True),
     'cookies_browser':    ('str',  ''),
+    'playlist_mode':      ('str',  'audio_mp3'),
+    'playlist_bitrate':   ('str',  '0'),
 }
 
 
@@ -432,7 +434,8 @@ class _BaseSelectionDialog(Toplevel):
         self.title(title)
         self.resizable(True, True)
         self.grab_set()
-        self.result = None
+        self.result      = None
+        self.last_checked: set = set()
 
         sw, sh = parent.winfo_screenwidth(), parent.winfo_screenheight()
         w, h, min_w, min_h = *geometry, *minsize
@@ -571,13 +574,29 @@ class PlaylistDialog(_BaseSelectionDialog):
     """
     Zeigt alle (bereits deduplizierten) Einträge einer Playlist.
     Ergebnis: dict {'indices': [...], 'mode': str, 'bitrate': str} oder None.
+
+    checked_indices   – Set[int]: welche Einträge beim letzten Öffnen angehakt waren.
+                        None bedeutet: Standardverhalten (alle downloadbaren an).
+    downloaded_stems  – dict[str, str]: stem → 'audio'|'video', Dateien im Zielordner.
+                        Passende Einträge werden hellgrün markiert + Symbol angezeigt.
     """
+
+    # Hintergrundfarben
+    _BG_NORMAL     = ''          # leer = Theme-Standard
+    _BG_DOWNLOADED = '#c8f0c8'   # hellgrün
+    _BG_UNAVAIL    = ''          # bleibt Standard, Schrift rot
 
     def __init__(self, parent, entries: list,
                  default_mode: str = "audio_mp3",
                  default_bitrate: str = "320",
-                 title_prefix: str = "Playlist"):
-        self._entries = entries
+                 title_prefix: str = "Playlist",
+                 checked_indices: set | None = None,
+                 downloaded_stems: set | None = None):
+        self._entries          = entries
+        self._checked_indices  = checked_indices   # None = erster Aufruf
+        self._downloaded_stems: dict = downloaded_stems or {}  # stem → 'audio'|'video'
+        self.last_checked: set = set()             # wird beim Schließen gefüllt
+        self._row_frames: list = []                # für Hintergrund-Updates
         super().__init__(
             parent,
             default_mode=default_mode,
@@ -589,45 +608,123 @@ class PlaylistDialog(_BaseSelectionDialog):
         )
 
     def _build_header(self, head: ttk.Frame):
-        ttk.Label(head, text=f"📋  {len(self._entries)} Einträge",
+        n_dl = sum(1 for e in self._entries if not _is_unavailable_entry(e))
+        n_done = sum(
+            1 for e in self._entries
+            if self._is_downloaded(e) and not _is_unavailable_entry(e))
+        lbl = f"📋  {len(self._entries)} Einträge"
+        if n_done:
+            lbl += f"  •  ✅ {n_done} bereits vorhanden"
+        ttk.Label(head, text=lbl,
                   font=('Segoe UI', 11, 'bold')).pack(side='left')
         sel_frame = ttk.Frame(head)
         sel_frame.pack(side='right')
-        for lbl, cmd, w in [
+        for lbl2, cmd, w in [
             ("Alle",               self._all,                 8),
             ("Keine",              self._none,                8),
             ("Umkehren",           self._invert,              9),
             ("✅ Nur Downloadbare", self._select_downloadable, 18),
         ]:
-            ttk.Button(sel_frame, text=lbl, width=w,
+            ttk.Button(sel_frame, text=lbl2, width=w,
                        command=cmd).pack(side='left', padx=2)
 
+    def _is_downloaded(self, entry: dict) -> set:
+        """
+        Gibt ein Set zurück: {'audio'}, {'video'}, {'audio','video'} oder set().
+        Prüft ob passende Dateien in Audio- UND/ODER Video-Ordner existieren.
+        """
+        if not self._downloaded_stems:
+            return set()
+        title = (entry.get('title') or '').strip()
+        if not title:
+            return set()
+        safe = re.sub(r'[\\/*?:"<>|]', '_', title).strip()
+        found: set = set()
+        for stem, kinds in self._downloaded_stems.items():
+            if stem == safe or stem.startswith(safe + ' ('):
+                found |= kinds
+        return found
+
     def _populate_rows(self, inner: ttk.Frame):
+        _bg_dialog = ttk.Style().lookup('TFrame', 'background') or '#d9d9d9'
+        self._row_frames.clear()
+
         for i, entry in enumerate(self._entries):
             title  = entry.get('title') or f'Eintrag {i+1}'
             is_bad = _is_unavailable_entry(entry)
-            var = BooleanVar(value=not is_bad)
+            is_done = self._is_downloaded(entry) if not is_bad else set()
+
+            # Startzustand der Checkbox:
+            # – erster Aufruf (checked_indices is None):
+            #     nicht verfügbar → aus; bereits heruntergeladen → aus; sonst → an
+            # – Folgeaufruf: gespeicherten Zustand exakt wiederherstellen
+            if self._checked_indices is None:
+                initial = (not is_bad) and (not is_done)
+            else:
+                initial = (i in self._checked_indices)
+
+            var = BooleanVar(value=initial)
             self._vars.append(var)
-            row = ttk.Frame(inner)
+
+            # Zeilenhintergrund
+            bg = self._BG_DOWNLOADED if is_done else _bg_dialog
+
+            row = Frame(inner, background=bg)
             row.pack(fill='x', padx=4, pady=1)
-            ttk.Checkbutton(row, variable=var).pack(side='left')
-            ttk.Label(row, text=f"{i+1:>3}.", width=4,
-                      font=('Segoe UI', 9), foreground='#888').pack(side='left')
+            self._row_frames.append(row)
+
+            cb = ttk.Checkbutton(row, variable=var)
+            cb.pack(side='left')
+
+            Label(row, text=f"{i+1:>3}.",
+                  width=4, font=('Segoe UI', 9),
+                  foreground='#888', background=bg,
+                  anchor='e').pack(side='left')
+
             dur   = entry.get('duration') or 0
             dur_s = f"  [{int(dur//60)}:{int(dur%60):02d}]" if dur else ""
-            ttk.Label(
+
+            if is_bad:
+                text_color = '#CC0000'
+                icon   = ''
+                suffix = '  ⚠ nicht verfügbar'
+            elif is_done:
+                text_color = '#1a6b1a'
+                # Beide, nur Audio, nur Video
+                if 'audio' in is_done and 'video' in is_done:
+                    icon = '  🎵🎬'
+                elif 'audio' in is_done:
+                    icon = '  🎵'
+                else:
+                    icon = '  🎬'
+                suffix = ''
+            else:
+                text_color = 'black'
+                icon   = ''
+                suffix = ''
+
+            Label(
                 row,
-                text=f"{title}{dur_s}{'  ⚠ nicht verfügbar' if is_bad else ''}",
+                text=f"{title}{dur_s}{icon}{suffix}",
                 font=('Segoe UI', 9), anchor='w',
-                foreground='#CC0000' if is_bad else 'black',
+                foreground=text_color, background=bg,
             ).pack(side='left', fill='x', expand=True, padx=(4, 0))
 
     def _select_downloadable(self):
         for var, entry in zip(self._vars, self._entries):
             var.set(not _is_unavailable_entry(entry))
 
+    def _collect_checked(self) -> set:
+        return {i for i, v in enumerate(self._vars) if v.get()}
+
+    def _cancel(self):
+        self.last_checked = self._collect_checked()
+        self.result = None
+        self.destroy()
+
     def _ok(self):
         sel = [i for i, v in enumerate(self._vars) if v.get()]
+        self.last_checked = set(sel)
         if not sel:
             messagebox.showwarning("Hinweis",
                 "Bitte mindestens einen Eintrag auswählen.", parent=self)
@@ -1353,13 +1450,30 @@ class YouTubeDownloaderApp:
             opts['cookiesfrombrowser'] = (browser,)
         return opts
 
-    def _download_opts(self) -> dict:
+    def _download_opts(self, mode: str = '') -> dict:
         """
         Erweiterte yt-dlp-Optionen für echte Downloads:
         _base_opts() + Metadaten-Tags + Thumbnail einbetten (falls aktiviert).
         Nur hier wird writethumbnail gesetzt – niemals bei der Analyse.
+
+        mode: 'audio_mp3' | 'audio_opus' | 'video_mp4' | 'video_best' | ''
+              Bei Video-Modi wird EmbedThumbnail weggelassen (MKV/WebM
+              unterstützen das nicht zuverlässig). Die .webp/.jpg-Thumbnail-
+              Datei wird nach dem Download automatisch via postprocessor_hook
+              gelöscht, damit kein Bilddatei-Müll übrig bleibt.
         """
         opts = self._base_opts()
+
+        # ffprobe neben ffmpeg suchen (imageio_ffmpeg liefert nur ffmpeg.exe)
+        ffmpeg_exe = opts.get('ffmpeg_location', '')
+        if ffmpeg_exe:
+            ffprobe_candidate = os.path.join(
+                os.path.dirname(ffmpeg_exe),
+                'ffprobe' + ('.exe' if os.name == 'nt' else ''))
+            if os.path.isfile(ffprobe_candidate):
+                opts['ffprobe_location'] = ffprobe_candidate
+
+        is_video = mode.startswith('video')
         pps = []
         if self.write_tags_var.get():
             pps.append({
@@ -1368,9 +1482,11 @@ class YouTubeDownloaderApp:
                 'add_chapters': False,
             })
         if self.write_thumbnail_var.get():
-            opts['writethumbnail'] = True
-            # EmbedThumbnail muss NACH FFmpegMetadata kommen
-            pps.append({'key': 'EmbedThumbnail'})
+            if not is_video:
+                # Audio: Thumbnail herunterladen und einbetten (MP3/Opus unterstützen das)
+                opts['writethumbnail'] = True
+                pps.append({'key': 'EmbedThumbnail'})
+            # Bei Video: kein writethumbnail → keine Bilddatei wird erzeugt
         if pps:
             opts['postprocessors'] = pps
         return opts
@@ -1583,13 +1699,19 @@ class YouTubeDownloaderApp:
         return self._playlist_result
 
     def _open_playlist_popup(self, entries, default_mode, default_bitrate, title_prefix):
+        pending = self._pending_playlist or {}
         dlg = PlaylistDialog(self.root, entries,
                              default_mode=default_mode,
                              default_bitrate=default_bitrate,
-                             title_prefix=title_prefix)
+                             title_prefix=title_prefix,
+                             checked_indices=pending.get('checked'),
+                             downloaded_stems=pending.get('downloaded_stems'))
         self.root.wait_window(dlg)
         self._playlist_result = dlg.result
         self._playlist_cancel = (dlg.result is None)
+        # Checkbox-Zustand merken (auch bei Abbrechen)
+        if self._pending_playlist is not None:
+            self._pending_playlist['checked'] = dlg.last_checked
         if self._playlist_event:
             self._playlist_event.set()
 
@@ -1685,10 +1807,21 @@ class YouTubeDownloaderApp:
             self.root.after(0, lambda: self.set_status(
                 f"Playlist '{pl_title}' – {len(entries)} Einträge"))
 
+            # Bereits heruntergeladene Dateien ermitteln (Audio + Video-Ordner scannen)
+            # dl_stems: {stem: set('audio'|'video')} – ein Stem kann in beiden Ordnern liegen
+            dl_stems: dict = {}
+            for stem in _scan_existing_stems(self.audio_path_var.get()):
+                dl_stems.setdefault(stem, set()).add('audio')
+            for stem in _scan_existing_stems(self.video_path_var.get()):
+                dl_stems.setdefault(stem, set()).add('video')
+            if self._pending_playlist is None:
+                self._pending_playlist = {'entries': entries, 'title': pl_title}
+            self._pending_playlist['downloaded_stems'] = dl_stems
+
             result = self._request_playlist_popup(
                 entries,
-                default_mode    = 'audio_mp3',
-                default_bitrate = self.quick_bitrate_var.get(),
+                default_mode    = self._cfg.get('playlist_mode', 'audio_mp3'),
+                default_bitrate = self._cfg.get('playlist_bitrate', self.quick_bitrate_var.get()),
                 title_prefix    = f"Playlist: {pl_title}")
 
             if result is None:
@@ -1697,11 +1830,19 @@ class YouTubeDownloaderApp:
                 self.root.after(0, lambda: self.set_status("Abgebrochen."))
                 return
 
+            # Modus & Bitrate für nächste Öffnung merken
+            self._cfg['playlist_mode']    = result['mode']
+            self._cfg['playlist_bitrate'] = result['bitrate']
+            _config_save(self._cfg)
+
             self._pending_playlist = {
-                'url':     self._get_urls()[0] if self._get_urls() else '',
-                'entries': entries,
-                'title':   pl_title,
-                'result':  result,
+                'url':              self._get_urls()[0] if self._get_urls() else '',
+                'entries':          entries,
+                'title':            pl_title,
+                'result':           result,
+                'checked':          self._pending_playlist.get('checked') if self._pending_playlist else None,
+                'downloaded_stems': self._pending_playlist.get('downloaded_stems', {}) if self._pending_playlist else {},
+                'list_id':          self._pending_playlist.get('list_id') if self._pending_playlist else None,
             }
             n_sel    = len(result['indices'])
             mode_lbl = MODES_DICT.get(result['mode'], result['mode'])
@@ -1733,9 +1874,9 @@ class YouTubeDownloaderApp:
                 pl_title = pending.get('title', '')
                 result = self._request_playlist_popup(
                     entries,
-                    default_mode='audio_mp3',
-                    default_bitrate='0',
-                    title_prefix=f"Playlist: {pl_title}")
+                    default_mode    = self._cfg.get('playlist_mode', 'audio_mp3'),
+                    default_bitrate = self._cfg.get('playlist_bitrate', '0'),
+                    title_prefix    = f"Playlist: {pl_title}")
                 if result is None:
                     self.root.after(0, lambda: self.set_status("Abgebrochen."))
                     return
@@ -1759,7 +1900,7 @@ class YouTubeDownloaderApp:
 
     def _build_opts_for_mode(self, mode: str, bitrate: str) -> tuple[dict, str]:
         """Gibt (opts, dest) passend zum Modus zurück."""
-        opts = self._download_opts()
+        opts = self._download_opts(mode)
 
         if mode == 'audio_mp3':
             dest = self.audio_path_var.get()
@@ -2097,7 +2238,9 @@ class YouTubeDownloaderApp:
                     else self.audio_path_var.get())
             self._ensure_dir(dest)
 
-            opts = self._download_opts()
+            # Modus für _download_opts bestimmen (Video oder Audio)
+            _custom_mode = 'video_mp4' if vfmt else 'audio_mp3'
+            opts = self._download_opts(_custom_mode)
             opts.update({
                 'format': fmt_str,
                 'outtmpl': path.join(dest, '%(title)s.%(ext)s'),
