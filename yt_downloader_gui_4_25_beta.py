@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-__version__ = '4.21.0'
+__version__ = '4.25.0 beta'
 
 """
 YouTube Downloader GUI
@@ -662,11 +662,14 @@ class YouTubeDownloaderApp:
         self.audio_path_var    = StringVar()
         self.video_path_var    = StringVar()
         self.audio_to_mp3_var  = BooleanVar(value=True)
+        self.audio_format_var  = StringVar(value="mp3")   # "webm" | "mp3" | "opus"
         self.video_to_mp4_var  = BooleanVar(value=True)
         self.mp3_bitrate_var   = StringVar(value="320")
         self.quick_bitrate_var = StringVar(value="320")
-        self.open_folder_var   = BooleanVar(value=False)
-        self.write_tags_var    = BooleanVar(value=True)
+        self.open_folder_var      = BooleanVar(value=False)
+        self.write_tags_var       = BooleanVar(value=True)
+        self.write_thumbnail_var  = BooleanVar(value=True)
+        self.cookies_browser_var  = StringVar(value="")   # leer = keine Cookies
 
         self.clicked_stream_video = StringVar()
         self.clicked_stream_audio = StringVar()
@@ -984,9 +987,10 @@ class YouTubeDownloaderApp:
 
         mp3f = ttk.Frame(self._adv_frame)
         mp3f.grid(row=3, column=1, padx=(8, 0), sticky='w')
-        ttk.Checkbutton(mp3f, text="zu MP3",
-                        variable=self.audio_to_mp3_var,
-                        command=self._toggle_bitrate_state).pack(anchor='w')
+        ttk.Label(mp3f, text="Audio-Format:", style='Info.TLabel').pack(anchor='w')
+        for lbl, val in [("WebM (roh)", "webm"), ("MP3", "mp3"), ("Opus", "opus")]:
+            ttk.Radiobutton(mp3f, text=lbl, variable=self.audio_format_var,
+                            value=val, command=self._toggle_bitrate_state).pack(anchor='w')
         brow = ttk.Frame(mp3f)
         brow.pack(anchor='w', pady=(3, 0))
         ttk.Label(brow, text="Bitrate:", style='Info.TLabel').pack(side='left')
@@ -1040,7 +1044,22 @@ class YouTubeDownloaderApp:
         ttk.Checkbutton(opt_row, text="📂 Zielordner nach Download öffnen",
                         variable=self.open_folder_var).pack(side='left', padx=(0, 20))
         ttk.Checkbutton(opt_row, text="🏷 Metadaten-Tags in Datei schreiben",
-                        variable=self.write_tags_var).pack(side='left')
+                        variable=self.write_tags_var).pack(side='left', padx=(0, 20))
+        ttk.Checkbutton(opt_row, text="🖼 Thumbnail einbetten",
+                        variable=self.write_thumbnail_var).pack(side='left')
+
+        # ── Cookies-Zeile ─────────────────────────────────────────────────────
+        ck_row = ttk.Frame(self._so_frame)
+        ck_row.grid(row=3, column=0, columnspan=3, sticky='w', pady=(6, 2))
+        ttk.Label(ck_row, text="🍪 Cookies aus Browser:",
+                  style='Info.TLabel').pack(side='left', padx=(0, 6))
+        _BROWSERS = ["", "chrome", "firefox", "edge", "brave", "opera", "safari"]
+        ck_combo = ttk.Combobox(ck_row, textvariable=self.cookies_browser_var,
+                                values=_BROWSERS, width=10, state='readonly')
+        ck_combo.pack(side='left')
+        ttk.Label(ck_row,
+                  text="  ← Browser wählen um YouTube-Anmeldung zu nutzen (löst 429-Fehler)",
+                  style='Info.TLabel').pack(side='left')
 
         self.root.after(0, lambda: self._toggle_quickdownload(force_open=True))
 
@@ -1067,7 +1086,7 @@ class YouTubeDownloaderApp:
 
     def _toggle_bitrate_state(self):
         self.bitrate_combo.config(
-            state='readonly' if self.audio_to_mp3_var.get() else 'disabled')
+            state='readonly' if self.audio_format_var.get() == 'mp3' else 'disabled')
 
     def _set_download_active(self, active: bool):
         state = 'normal' if active else 'disabled'
@@ -1221,12 +1240,24 @@ class YouTubeDownloaderApp:
             'quiet':       False,
             'no_warnings': False,
         }
+        # Cookies aus Browser (löst YouTube 429 / Bot-Erkennung)
+        browser = self.cookies_browser_var.get().strip()
+        if browser:
+            opts['cookiesfrombrowser'] = (browser,)
+
+        pps = []
         if self.write_tags_var.get():
-            opts['postprocessors'] = [{
+            pps.append({
                 'key':          'FFmpegMetadata',
                 'add_metadata': True,
                 'add_chapters': False,
-            }]
+            })
+        if self.write_thumbnail_var.get():
+            opts['writethumbnail'] = True
+            # EmbedThumbnail muss NACH FFmpegMetadata kommen
+            pps.append({'key': 'EmbedThumbnail'})
+        if pps:
+            opts['postprocessors'] = pps
         return opts
 
     def _ensure_dir(self, d):
@@ -1636,6 +1667,13 @@ class YouTubeDownloaderApp:
                            '/bestaudio/best'),
                 'outtmpl': path.join(dest, '%(title)s.%(ext)s'),
             })
+            pps = opts.get('postprocessors', [])
+            # Immer zu .opus re-encodieren (OGG-Container, verlustfrei mit quality 0)
+            # → saubere Extension, Metadaten & Thumbnails werden unterstützt
+            opus_pp = {'key': 'FFmpegExtractAudio',
+                       'preferredcodec': 'opus', 'preferredquality': '0'}
+            opts['postprocessors'] = [opus_pp] + [
+                p for p in pps if p.get('key') != 'FFmpegExtractAudio']
 
         elif mode == 'video_mp4':
             dest = self.video_path_var.get()
@@ -1952,14 +1990,23 @@ class YouTubeDownloaderApp:
             if vfmt:
                 opts['merge_output_format'] = (
                     'mp4' if self.video_to_mp4_var.get() else vext)
-            if not vfmt and self.audio_to_mp3_var.get():
-                bitrate = self.mp3_bitrate_var.get()
+            if not vfmt:
+                audio_fmt = self.audio_format_var.get()
+                bitrate   = self.mp3_bitrate_var.get()
                 pps = opts.get('postprocessors', [])
-                opts['postprocessors'] = [{
-                    'key':              'FFmpegExtractAudio',
-                    'preferredcodec':   'mp3',
-                    'preferredquality': bitrate,
-                }] + [p for p in pps if p.get('key') != 'FFmpegExtractAudio']
+                if audio_fmt == 'mp3':
+                    opts['postprocessors'] = [{
+                        'key':              'FFmpegExtractAudio',
+                        'preferredcodec':   'mp3',
+                        'preferredquality': bitrate,
+                    }] + [p for p in pps if p.get('key') != 'FFmpegExtractAudio']
+                elif audio_fmt == 'opus':
+                    opts['postprocessors'] = [{
+                        'key':              'FFmpegExtractAudio',
+                        'preferredcodec':   'opus',
+                        'preferredquality': '0',
+                    }] + [p for p in pps if p.get('key') != 'FFmpegExtractAudio']
+                # 'webm' → kein Postprozessor, rohe WebM-Datei
 
             self.root.after(0, lambda: self.set_status("Download läuft...", True))
 
