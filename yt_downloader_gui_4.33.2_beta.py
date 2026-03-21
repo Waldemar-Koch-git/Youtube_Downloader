@@ -194,9 +194,15 @@ def _scan_existing_stems(folder: str) -> set:
 
 def _collect_final_path(opts: dict) -> tuple:
     """
-    Hängt einen postprocessor_hook ein, der den finalen Dateipfad nach
-    Abschluss aller Postprozessoren in eine 1-Element-Liste schreibt.
+    Hängt einen postprocessor_hook UND einen progress_hook ein, die den
+    finalen Dateipfad nach Abschluss aller Postprozessoren in eine
+    1-Element-Liste schreiben.
     Gibt (neue_opts, result_liste) zurück – result[0] ist nach dem Download befüllt.
+
+    Hinweis: yt-dlp setzt 'filepath' im info_dict nicht bei jedem PP-Schritt
+    zuverlässig (z.B. fehlt er nach FFmpegMetadata). Daher wird der zuletzt
+    bekannte Pfad beibehalten (niemals mit leerem Wert überschrieben) und
+    zusätzlich per progress_hook aus dem Download-Status ermittelt.
     """
     result: list = [None]
 
@@ -207,10 +213,23 @@ def _collect_final_path(opts: dict) -> tuple:
         if fp:
             result[0] = fp
 
+    def _prog_hook(d):
+        # Beim Abschluss des Downloads den Pfad aus dem Dateinamen sichern,
+        # bevor Postprozessoren ihn ggf. umbenennen (Extension-Wechsel).
+        # Dient als initiale Basis; _pp_hook überschreibt mit dem echten Endpfad.
+        if d.get('status') == 'finished':
+            fp = d.get('filename') or d.get('tmpfilename') or ''
+            if fp and not result[0]:
+                result[0] = fp
+
     new_opts = dict(opts)
     pph = list(new_opts.get('postprocessor_hooks') or [])
     pph.append(_pp_hook)
     new_opts['postprocessor_hooks'] = pph
+    # progress_hook als Fallback einhängen (wird VOR den PP-Hooks ausgelöst)
+    prh = list(new_opts.get('progress_hooks') or [])
+    prh.insert(0, _prog_hook)
+    new_opts['progress_hooks'] = prh
     new_opts['no_overwrites'] = False
     return new_opts, result
 
@@ -451,6 +470,68 @@ def _parse_yt_url(url: str) -> dict:
         'is_video':             video_id is not None,
         'is_video_in_playlist': video_id is not None and list_id is not None,
     }
+
+
+def _is_channel_url(url: str) -> bool:
+    """
+    Gibt True zurück wenn die URL auf einen YouTube-Kanal zeigt
+    (/@handle, /channel/ID, /c/Name, /user/Name) – aber KEINE Video- oder Playlist-URL.
+    """
+    p = _parse_yt_url(url)
+    if p['video_id'] or p['list_id']:
+        return False
+    low = url.lower()
+    return (
+        '/@' in low
+        or '/channel/' in low
+        or '/c/' in low
+        or '/user/' in low
+    )
+
+
+def _channel_name_from_url(url: str) -> str:
+    """
+    Extrahiert den Kanal-Handle/-Namen aus einer Channel-URL als sicheren Ordnernamen.
+    Beispiele:
+      https://www.youtube.com/@Germaninexile  →  'Germaninexile'
+      https://www.youtube.com/channel/UCxxxx  →  'UCxxxx'
+      https://www.youtube.com/c/MyChannel     →  'MyChannel'
+    """
+    for marker in ('/@', '/channel/', '/c/', '/user/'):
+        if marker in url:
+            part = url.split(marker, 1)[1]
+            # Fragment/Query abschneiden
+            part = part.split('?')[0].split('#')[0].split('/')[0].strip()
+            # Ungültige Zeichen für Ordnernamen entfernen
+            safe = re.sub(r'[\\/*?:"<>|]', '_', part).strip()
+            return safe or 'channel'
+    return 'channel'
+
+
+def _flatten_channel_entries(info: dict) -> list:
+    """
+    Sammelt rekursiv alle Video-Einträge aus einer Channel-Info-Struktur.
+    yt-dlp liefert bei /@handle eine verschachtelte Struktur:
+      Channel → [Tab-Playlist, ...] → [Sub-Playlist, ...] → [Video, ...]
+    Diese Funktion gibt eine flache Liste aller Blatt-Einträge (Videos) zurück.
+    """
+    entries = list(info.get('entries') or [])
+    if not entries:
+        return []
+
+    # Prüfe ob Einträge selbst wieder Playlists sind
+    result = []
+    for e in entries:
+        if e is None:
+            continue
+        sub = e.get('entries')
+        if sub is not None:
+            # Rekursiv einsteigen
+            result.extend(_flatten_channel_entries(e))
+        else:
+            # Blatt-Eintrag (Video)
+            result.append(e)
+    return result
 
 
 def _resolve_entry_from_playlist(pl_entries: list, p_url: dict) -> str | None:
@@ -2360,6 +2441,115 @@ class YouTubeDownloaderApp:
 
                 resolved.append(_resolve_entry_from_playlist(pl_entries, p_url) or url)
                 continue
+
+            # ── Channel-URL (/@handle, /channel/, /c/, /user/) ────────────────
+            # yt-dlp liefert hier eine verschachtelte Playlist-Struktur
+            # (Channel → Tabs → Sub-Playlists → Videos).  Würden wir die URL
+            # direkt an yt-dlp übergeben, lädt es alle Videos in einem
+            # einzigen ydl.extract_info()-Aufruf – unsere Hooks für
+            # Thumbnail-Embedding greifen dann NICHT.
+            # Lösung: Einträge vorab flach auflösen, jeden Video-URL einzeln
+            # durch _run_urls schicken (wo Hooks zuverlässig feuern).
+            # Außerdem wird ein Unterordner <Kanalname> angelegt.
+            if _is_channel_url(url):
+                ch_name = _channel_name_from_url(url)
+                self.root.after(0, lambda n=ch_name: self.set_status(
+                    f"Kanal '{n}' wird analysiert...", True))
+                try:
+                    opts_ch = self._base_opts()
+                    opts_ch['extract_flat'] = True
+                    opts_ch['noplaylist']   = False
+                    with yt_dlp.YoutubeDL(opts_ch) as ydl:
+                        ch_info = ydl.extract_info(url, download=False)
+                except Exception as e:
+                    ev = threading.Event()
+                    self.root.after(0, lambda e=e, u=url: (
+                        messagebox.showerror("Fehler", f"Kanal nicht abrufbar:\n{u}\n\n{e}"),
+                        ev.set()))
+                    ev.wait(15)
+                    return
+
+                flat = _deduplicate_entries(_flatten_channel_entries(ch_info))
+                downloadable = [e for e in flat if not _is_unavailable_entry(e)]
+                if not downloadable:
+                    self.root.after(0, lambda n=ch_name: self.set_status(
+                        f"Kanal '{n}': Keine downloadbaren Einträge gefunden."))
+                    continue
+
+                ch_urls = [_entry_url(e) for e in downloadable]
+                n_dl = len(ch_urls)
+                self.root.after(0, lambda n=n_dl, nm=ch_name: self.set_status(
+                    f"Kanal '{nm}': {n} Videos werden geladen...", True))
+
+                # Unterordner anlegen: <Basispfad>/<Kanalname>
+                base_opts_ch, base_dest = self._build_opts_for_mode(mode, bitrate)
+                ch_dest = os.path.join(base_dest, ch_name)
+                self._ensure_dir(ch_dest)
+
+                # outtmpl auf Unterordner umbiegen
+                old_outtmpl = base_opts_ch.get('outtmpl', '')
+                if old_outtmpl:
+                    base_opts_ch['outtmpl'] = os.path.join(
+                        ch_dest, os.path.basename(old_outtmpl))
+                else:
+                    base_opts_ch['outtmpl'] = os.path.join(ch_dest, '%(title)s.%(ext)s')
+
+                # Direkt herunterladen (nicht nochmal _run_urls mit mode-Erkennung,
+                # sondern den bereits angepassten opts-Block verwenden)
+                self._cancel_flag = False
+                self._pause_event.set()
+                self._set_download_active(True)
+                known = _scan_existing_stems(ch_dest)
+                done_ch = []
+                total_ch = len(ch_urls)
+                for i, v_url in enumerate(ch_urls):
+                    if self._check_pause_cancel():
+                        break
+                    item_opts = dict(base_opts_ch)
+                    item_opts['noplaylist'] = True
+                    item_opts = _resolve_outtmpl_unique(v_url, item_opts, known)
+                    item_opts, fp_ref = _collect_final_path(item_opts)
+                    item_opts['progress_hooks'] = list(item_opts.get('progress_hooks') or []) + [
+                        self._make_hook(f"{prefix} ({i+1}/{total_ch})", idx=i, total=total_ch)]
+                    self.root.after(0, lambda i=i, t=total_ch: self.status_var.set(
+                        f"Download {i+1}/{t}..."))
+                    try:
+                        with yt_dlp.YoutubeDL(item_opts) as ydl:
+                            info_dl = ydl.extract_info(v_url)
+                            done_ch.append(info_dl.get('title', v_url))
+                        _rename_after_download(fp_ref, known)
+                        if (mode == 'audio_opus'
+                                and fp_ref[0]
+                                and fp_ref[0].lower().endswith('.opus')):
+                            _ff = base_opts_ch.get('_opus_embed_ffmpeg', '')
+                            if _ff:
+                                _embed_thumbnail_as_jpeg(fp_ref[0], _ff)
+                        elif (mode == 'audio_mp3'
+                                and fp_ref[0]
+                                and fp_ref[0].lower().endswith('.mp3')):
+                            _ff = base_opts_ch.get('_mp3_embed_ffmpeg', '')
+                            if _ff:
+                                _embed_thumbnail_as_jpeg(fp_ref[0], _ff)
+                    except Exception as e:
+                        if self._cancel_flag:
+                            break
+                        self.root.after(0, lambda u=v_url, err=str(e): self.status_var.set(
+                            f"Übersprungen: {u[:50]}…"))
+                        continue
+                self._set_download_active(False)
+                n = len(done_ch)
+                if n:
+                    msg = f"✅ {n} Datei(en) heruntergeladen\nOrdner: {ch_dest}"
+                    self.root.after(0, lambda: (
+                        self.set_status("Download abgeschlossen!"),
+                        self._reset_progress(),
+                        messagebox.showinfo("Erfolg", msg),
+                        self._open_folder_if_wanted(ch_dest)))
+                else:
+                    self.root.after(0, lambda: (
+                        self.set_status("Kein Download abgeschlossen."),
+                        self._reset_progress()))
+                return
 
             opts = self._base_opts()
             opts['extract_flat'] = True
