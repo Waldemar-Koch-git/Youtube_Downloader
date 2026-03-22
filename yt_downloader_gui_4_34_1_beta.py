@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-__version__ = '4.33.4 beta'
+__version__ = '4.34.1 beta'
 
 """
 YouTube Downloader GUI
@@ -13,6 +13,7 @@ License: MIT
 # pip install mutagen imageio-ffmpeg yt-dlp[default] 
 
 # mutagen for opus files (just only write thumpnail into file)
+# empfohlen: node installieren für die login cokies, um nicht als bot verdächtigt zu werden.
 
 import os
 import re
@@ -67,6 +68,7 @@ _CONFIG_SCHEMA: dict[str, tuple[str, object]] = {
     'audio_to_mp3':       ('bool', True),
     'audio_format':       ('str',  'mp3'),
     'video_to_mp4':       ('bool', True),
+    'video_format':       ('str',  'mp4'),
     'mp3_bitrate':        ('str',  '320'),
     'open_folder':        ('bool', False),
     'write_tags':         ('bool', True),
@@ -403,14 +405,25 @@ def _embed_thumbnail_as_jpeg(media_fp: str, ffmpeg_exe: str):
             # FFmpeg remux: Original + Cover → Temp-Datei → Original ersetzen
             tmp_out = stem + '_covtmp' + ext_lower
             try:
-                _sp.run(
-                    [ffmpeg_exe, '-y',
-                     '-i', media_fp, '-i', th_jpg,
-                     '-map', '0', '-map', '1',
-                     '-c', 'copy',
-                     '-disposition:v:1', 'attached_pic',
-                     tmp_out],
-                    stdout=_sp.DEVNULL, stderr=_sp.DEVNULL, check=True)
+                if ext_lower == '.mkv':
+                    # MKV/Matroska kennt kein 'attached_pic' – Cover als
+                    # Datei-Attachment einbetten (wird von VLC, mpv, Kodi erkannt).
+                    cmd = [ffmpeg_exe, '-y',
+                           '-i', media_fp,
+                           '-c', 'copy',
+                           '-attach', th_jpg,
+                           '-metadata:s:t', 'mimetype=image/jpeg',
+                           '-metadata:s:t', 'filename=cover.jpg',
+                           tmp_out]
+                else:
+                    # MP4 / WebM: Cover als Videostream mit attached_pic einbetten
+                    cmd = [ffmpeg_exe, '-y',
+                           '-i', media_fp, '-i', th_jpg,
+                           '-map', '0', '-map', '1',
+                           '-c', 'copy',
+                           '-disposition:v:1', 'attached_pic',
+                           tmp_out]
+                _sp.run(cmd, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL, check=True)
                 os.replace(tmp_out, media_fp)
             except Exception:
                 if os.path.isfile(tmp_out):
@@ -1074,8 +1087,9 @@ class YouTubeDownloaderApp:
         self.audio_path_var    = StringVar()
         self.video_path_var    = StringVar()
         self.audio_to_mp3_var  = BooleanVar(value=True)
-        self.audio_format_var  = StringVar(value="mp3")   # "webm" | "mp3" | "opus"
+        self.audio_format_var  = StringVar(value="mp3")   # "original" | "opus" | "mp3"
         self.video_to_mp4_var  = BooleanVar(value=True)
+        self.video_format_var  = StringVar(value="mp4")   # "original" | "mp4" | "mkv"
         self.mp3_bitrate_var   = StringVar(value="320")
         self.quick_bitrate_var = StringVar(value="320")
         self.open_folder_var      = BooleanVar(value=False)
@@ -1174,8 +1188,13 @@ class YouTubeDownloaderApp:
         self.audio_path_var.set(cfg.get('audio_path') or default_audio)
         self.video_path_var.set(cfg.get('video_path') or default_video)
         self.audio_to_mp3_var.set(cfg.get('audio_to_mp3', True))
-        self.audio_format_var.set(cfg.get('audio_format', 'mp3'))
+        # Migration: alte Werte 'm4a' und 'webm' → 'original'
+        raw_afmt = cfg.get('audio_format', 'mp3')
+        if raw_afmt in ('m4a', 'webm'):
+            raw_afmt = 'original'
+        self.audio_format_var.set(raw_afmt)
         self.video_to_mp4_var.set(cfg.get('video_to_mp4', True))
+        self.video_format_var.set(cfg.get('video_format', 'mp4'))
         self.mp3_bitrate_var.set(cfg.get('mp3_bitrate', '320'))
         self.open_folder_var.set(cfg.get('open_folder', False))
         self.write_tags_var.set(cfg.get('write_tags', True))
@@ -1190,6 +1209,7 @@ class YouTubeDownloaderApp:
             'audio_to_mp3':    self.audio_to_mp3_var.get(),
             'audio_format':    self.audio_format_var.get(),
             'video_to_mp4':    self.video_to_mp4_var.get(),
+            'video_format':    self.video_format_var.get(),
             'mp3_bitrate':     self.mp3_bitrate_var.get(),
             'open_folder':     self.open_folder_var.get(),
             'write_tags':      self.write_tags_var.get(),
@@ -1444,10 +1464,12 @@ class YouTubeDownloaderApp:
 
         video_opts = ttk.Frame(video_lf)
         video_opts.grid(row=1, column=0, sticky='w', pady=(4, 0))
-        ttk.Checkbutton(video_opts, text="zu MP4 konvertieren",
-                        variable=self.video_to_mp4_var).pack(side='left', padx=(0, 16))
+        ttk.Label(video_opts, text="Video-Format:", style='Info.TLabel').pack(side='left', padx=(0, 6))
+        for lbl, val in [("Original", "original"), ("MP4", "mp4"), ("MKV", "mkv")]:
+            ttk.Radiobutton(video_opts, text=lbl, variable=self.video_format_var,
+                            value=val).pack(side='left', padx=(0, 4))
         ttk.Checkbutton(video_opts, text="Video ignorieren",
-                        variable=self.ignore_video_var).pack(side='left')
+                        variable=self.ignore_video_var).pack(side='left', padx=(16, 0))
 
         # ── Bereich: Audio Stream ─────────────────────────────────────────────
         audio_lf = ttk.LabelFrame(self._adv_frame, text="Audio Stream", padding=(8, 4))
@@ -1465,7 +1487,7 @@ class YouTubeDownloaderApp:
         audio_opts.grid(row=1, column=0, sticky='w')
 
         ttk.Label(audio_opts, text="Audio-Format:", style='Info.TLabel').pack(side='left', padx=(0, 6))
-        for lbl, val in [("M4A (roh)", "m4a"), ("WebM (roh)", "webm"), ("Opus", "opus"), ("MP3", "mp3")]:
+        for lbl, val in [("Original", "original"), ("Opus", "opus"), ("MP3", "mp3")]:
             ttk.Radiobutton(audio_opts, text=lbl, variable=self.audio_format_var,
                             value=val, command=self._toggle_bitrate_state).pack(side='left', padx=(0, 4))
 
@@ -1560,7 +1582,7 @@ class YouTubeDownloaderApp:
         for var in (
             self.audio_path_var, self.video_path_var,
             self.audio_to_mp3_var, self.audio_format_var,
-            self.video_to_mp4_var, self.mp3_bitrate_var,
+            self.video_to_mp4_var, self.video_format_var, self.mp3_bitrate_var,
             self.open_folder_var, self.write_tags_var,
             self.write_thumbnail_var, self.cookies_browser_var,
         ):
@@ -2280,15 +2302,25 @@ class YouTubeDownloaderApp:
                            '/bestvideo[ext=mp4]+bestaudio'
                            '/bestvideo+bestaudio'
                            '/best'),
-                'outtmpl':             path.join(dest, '%(title)s.%(ext)s'),
-                'merge_output_format': 'mp4',
+                'outtmpl': path.join(dest, '%(title)s.%(ext)s'),
             })
+            vfmt = self.video_format_var.get()
+            if vfmt == 'original':
+                # Kein merge_output_format – yt-dlp wählt Extension selbst
+                pass
+            elif vfmt == 'mkv':
+                opts['merge_output_format'] = 'mkv'
+            else:  # 'mp4' (Standard)
+                opts['merge_output_format'] = 'mp4'
 
         else:  # video_best
             dest = self.video_path_var.get()
             opts.update({
                 'format': 'bestvideo+bestaudio/best',
                 'outtmpl': path.join(dest, '%(title)s.%(ext)s'),
+                # Stets MKV: unterstützt alle Codecs (auch webm/vp9/av1/opus)
+                # und erlaubt Metadaten + Thumbnail-Embedding
+                'merge_output_format': 'mkv',
             })
 
         return opts, dest
@@ -2720,8 +2752,13 @@ class YouTubeDownloaderApp:
                 'outtmpl': path.join(dest, '%(title)s.%(ext)s'),
             })
             if vfmt:
-                opts['merge_output_format'] = (
-                    'mp4' if self.video_to_mp4_var.get() else vext)
+                # Video-Format-Auswahl: Original | MP4 | MKV
+                vid_fmt_sel = self.video_format_var.get()
+                if vid_fmt_sel == 'mkv':
+                    opts['merge_output_format'] = 'mkv'
+                elif vid_fmt_sel == 'mp4':
+                    opts['merge_output_format'] = 'mp4'
+                # 'original' → kein merge_output_format setzen
             if not vfmt:
                 audio_fmt = self.audio_format_var.get()
                 bitrate   = self.mp3_bitrate_var.get()
@@ -2741,19 +2778,16 @@ class YouTubeDownloaderApp:
                           if p.get('key') not in ('FFmpegExtractAudio', 'EmbedThumbnail')]
                     opts['convert_thumbnails'] = False
                     opts['_opus_embed_ffmpeg'] = opts.get('ffmpeg_location') or 'ffmpeg'
-                elif audio_fmt == 'm4a':
-                    # M4A roh – kein Konvertierungs-PP, Thumbnail-Embedding erlaubt (m4a/mp4)
-                    opts['postprocessors'] = [
-                        p for p in pps if p.get('key') != 'FFmpegExtractAudio'
-                    ]
                 else:
-                    # 'webm' → rohe WebM-Datei, kein Konvertierungs-Postprozessor.
-                    # EmbedThumbnail entfernen: WebM wird von yt-dlp nicht unterstützt
-                    # (nur mp3, mkv/mka, ogg/opus/flac, m4a/mp4/m4v/mov).
+                    # 'original' → rohe Originaldatei, kein Konvertierungs-Postprozessor.
+                    # EmbedThumbnail entfernen (unbekanntes Format – sicherheitshalber).
                     opts['postprocessors'] = [
-                        p for p in pps if p.get('key') != 'EmbedThumbnail'
+                        p for p in pps
+                        if p.get('key') not in ('FFmpegExtractAudio', 'EmbedThumbnail')
                     ]
                     opts.pop('writethumbnail', None)
+                    opts.pop('_mp3_embed_ffmpeg', None)
+                    opts.pop('_opus_embed_ffmpeg', None)
 
             self.root.after(0, lambda: self.set_status("Download läuft...", True))
 
