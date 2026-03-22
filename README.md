@@ -65,7 +65,7 @@ Um Bot-Erkennung durch YouTube zu reduzieren, kann die GUI Cookies direkt aus ei
 python yt_downloader_gui.py
 ```
 
-oder doppelklick auf die datei
+Oder doppelklick auf die Datei.
 
 ---
 
