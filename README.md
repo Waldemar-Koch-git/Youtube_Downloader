@@ -1,60 +1,73 @@
-# Install
-## Externe Bibliotheken
-* yt-dlp
-* imageio-ffmpeg
-### Installation via pip
+# YouTube Downloader GUI v5.0
+
+Eine benutzerfreundliche grafische Oberfläche zum Herunterladen von Audio und Video aus YouTube-Links – mit modernem Design, Playlist-Support, Cover-Einbettung und flexibler Stream-Auswahl.
+
+![GUI](./images_/GUI.jpg)
+
+---
+
+## Features
+
+- **Audio-Download** als MP3 (inkl. wählbarer Bitrate) oder Opus
+- **Video-Download** als MP4 oder in maximaler Qualität
+- **Multi-URL** – mehrere Links auf einmal verarbeiten
+- **Playlist-Support** – komplette Playlists oder einzelne Einträge herunterladen
+- **Cover / Thumbnails** – werden automatisch als JPEG eingebettet (platzsparend, ~30–50 KB)
+- **Tags** – Metadaten werden automatisch in die Datei geschrieben
+- **Stream-Analyse** – alle verfügbaren Audio-/Videostreams eines Videos anzeigen und gezielt auswählen
+- **Custom-Download** – freie Kombination aus beliebigem Video- und Audiostream
+- **Einstellungen** werden automatisch gespeichert (Speicherpfade, Format, Bitrate, Browser …)
+- **Cookie-Import** aus dem Browser – reduziert Bot-Erkennung durch YouTube
+- **Pause / Abbrechen** während laufender Downloads
+
+---
+
+## Installation
+
+### Voraussetzungen
+
+- Python 3.10 oder neuer → [python.org](https://www.python.org/)  
+  *(Beim Installieren: „Add Python to PATH" aktivieren)*
+- Für Cookie-Import aus dem Browser: **Node.js** → [nodejs.org](https://nodejs.org)
+
+### Python-Bibliotheken
+
 ```
-pip install imageio-ffmpeg yt-dlp
-```
-
-# GUI
-![Gui Front Image](./images_/GUI.jpg)
-
-# Beschreibung
-## YouTube Downloader GUI - Modernisierte Version (v4.0.0)
-
-Eine benutzerfreundliche grafische Oberfläche zum Herunterladen von Audio und Video
-aus YouTube-Links mit modernem Design und verbessertem Workflow.
-
-Dieses Skript bietet eine einfache grafische Oberfläche zum Herunterladen von Audio und Video
-aus YouTube-Links.
-* **Audio** kann als MP3 heruntergeladen und konvertiert werden.
-* **Video** wird als MP4 (höchste verfügbare Auflösung oder maximale Qualität) gespeichert.
-* Es gibt ein Analyse-Modul, das alle verfügbaren Audio-/Videostreams anzeigt und dem Nutzer die
-  Auswahl eines konkreten Streams ermöglicht.
-
-Die Anwendung nutzt:
-- `yt-dlp` für die Abfrage der Stream-Informationen und den Download,
-- `ffmpeg` (von `imageio-ffmpeg`) zur Konvertierung von Audio und Video,
-- `threading.Thread`, damit die GUI während des Downloads nicht einfriert.
-
-Alle Optionen können über das Tkinter-GUI gesteuert werden; Pfade und Format-Auswahl
-werden als Einstellungen angeboten.
-
-# _Beta_
-![Gui Front Image](./images_/_gui_beta.jpg)
-
-Viele neue features wie 
-* Multi-URL
-* playlists 
-* Cover (*Thumbnails*)
-* Automatische Einstellung Abspeicherung
-* ...
-
-## Install
-
-### Externe Bibliotheken
-* yt-dlp[default] → YT-Bib
-* imageio-ffmpeg → Konverter
-* mutagen → (Tags platzsparend beschreiben inkl. verkleinerter Cover-größe)
-
-### Für Nutzung der Cookies aus den Browsern:
-* node → https://nodejs.org
-
-Man muss in ein beliebigen Browser *(z.B.: Firefox)* bei Youtube eingeloggt sein und dann in dieser GUI unter `Speicherorte & Optionen` ganz unten den jeweiligen Browser auswählen für den Import. Das sollte mögliches Boting reduzieren oder bzw. umgehen.
-
-#### Installation via pip
-```
-pip install mutagen imageio-ffmpeg yt-dlp[default]
+pip install mutagen static-ffmpeg yt-dlp[default]
 ```
 
+| Paket | Zweck |
+|---|---|
+| `yt-dlp[default]` | Download & Stream-Analyse |
+| `static-ffmpeg` | Stellt FFmpeg & ffprobe automatisch bereit (kein manuelles Installieren nötig) |
+| `mutagen` | Tags & Cover platzsparend in Audio-Dateien schreiben |
+
+> **Hinweis zu FFmpeg:** Wird beim ersten Programmstart automatisch heruntergeladen und lokal gecacht. Keine manuelle Installation erforderlich.
+
+### Automatisches Update-Skript (Windows)
+
+Das mitgelieferte `update_bibs.bat` prüft alle Abhängigkeiten und aktualisiert sie bei Bedarf per Doppelklick.
+
+---
+
+## Cookie-Import (empfohlen)
+
+Um Bot-Erkennung durch YouTube zu reduzieren, kann die GUI Cookies direkt aus einem installierten Browser auslesen.
+
+1. Im Browser (z.B. Firefox oder Chrome) bei YouTube einloggen
+2. In der GUI unter **Speicherorte & Optionen** → ganz unten den gewünschten Browser auswählen
+
+---
+
+## Starten
+
+```
+python yt_downloader_gui.py
+```
+
+oder doppelklick auf die datei
+---
+
+## Lizenz
+
+MIT

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-__version__ = '4.34.2 beta'
+__version__ = '5.0'
 
 """
 YouTube Downloader GUI
@@ -10,15 +10,16 @@ aus YouTube-Links mit modernem Design und verbessertem Workflow.
 
 License: MIT
 """
-# pip install mutagen imageio-ffmpeg yt-dlp[default] 
+# pip install mutagen static-ffmpeg yt-dlp[default]
 
 # mutagen for opus files (just only write thumpnail into file)
-# empfohlen: node installieren für die login cokies, um nicht als bot verdächtigt zu werden.
+# empfohlen: node installieren für die login cookies, um nicht als bot verdächtigt zu werden.
 
 import os
 import re
+import shutil
 import threading
-import imageio_ffmpeg as ffmpeg
+import static_ffmpeg
 import yt_dlp
 from tkinter import *
 from tkinter import ttk, filedialog, messagebox
@@ -28,6 +29,12 @@ from subprocess import Popen
 from urllib.parse import urlparse, parse_qs
 
 system(f"title YouTube Downloader - Version {__version__}")
+
+# FFmpeg + ffprobe einmalig beim Start bereitstellen.
+# static_ffmpeg lädt beim ersten Aufruf eine statische Binary herunter
+# und cached sie lokal; danach ist shutil.which('ffmpeg') und
+# shutil.which('ffprobe') auf allen Plattformen zuverlässig befüllt.
+static_ffmpeg.add_paths()
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Konstanten
@@ -1747,9 +1754,8 @@ class YouTubeDownloaderApp:
         Kein writethumbnail, keine Postprocessoren – damit die Analyse
         keine Bilddateien auf die Platte schreibt.
         """
-        import shutil
         opts = {
-            'ffmpeg_location': ffmpeg.get_ffmpeg_exe(),
+            'ffmpeg_location': shutil.which('ffmpeg') or '',
             'quiet':       False,
             'no_warnings': False,
         }
@@ -1782,14 +1788,10 @@ class YouTubeDownloaderApp:
         """
         opts = self._base_opts()
 
-        # ffprobe neben ffmpeg suchen (imageio_ffmpeg liefert nur ffmpeg.exe)
-        ffmpeg_exe = opts.get('ffmpeg_location', '')
-        if ffmpeg_exe:
-            ffprobe_candidate = os.path.join(
-                os.path.dirname(ffmpeg_exe),
-                'ffprobe' + ('.exe' if os.name == 'nt' else ''))
-            if os.path.isfile(ffprobe_candidate):
-                opts['ffprobe_location'] = ffprobe_candidate
+        # static_ffmpeg stellt ffmpeg UND ffprobe bereit → direkt per which auflösen
+        ffprobe_exe = shutil.which('ffprobe')
+        if ffprobe_exe:
+            opts['ffprobe_location'] = ffprobe_exe
 
         is_video = mode.startswith('video')
         pps = []
