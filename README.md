@@ -46,10 +46,11 @@ Viele neue features wie
 ### Externe Bibliotheken
 * yt-dlp[default] → YT-Bib
 * imageio-ffmpeg → Konverter
-* mutagen → (Tags beschreiben)
+* mutagen → (Tags platzsparend beschreiben inkl. verkleinerter Cover-größe)
 
-### Für Nutzung der Cokies aus den Browsern:
+### Für Nutzung der Cookies aus den Browsern:
 * node → https://nodejs.org
+Man muss in ein beliebigen Browser *(z.B.: Firefox)* eingeloggt sein und dann in dieser GUI unter `Speicherorte & Optionen` ganz unten den jeweiligen Browser auswählen für den Import.
 
 #### Installation via pip
 ```
