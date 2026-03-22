@@ -30,3 +30,29 @@ Die Anwendung nutzt:
 
 Alle Optionen können über das Tkinter-GUI gesteuert werden; Pfade und Format-Auswahl
 werden als Einstellungen angeboten.
+
+# _Beta_
+![Gui Front Image](./images_/_gui_beta.jpg)
+
+Viele neue features wie 
+* Multi-URL
+* playlists 
+* Cover (*Thumbnails*)
+* Automatische Einstellung Abspeicherung
+* ...
+
+## Install
+
+### Externe Bibliotheken
+* yt-dlp[default] → YT-Bib
+* imageio-ffmpeg → Konverter
+* mutagen → (Tags beschreiben)
+
+### Für Nutzung der Cokies aus den Browsern:
+* node → https://nodejs.org
+
+#### Installation via pip
+```
+pip install mutagen imageio-ffmpeg yt-dlp[default]
+```
+
