@@ -50,7 +50,8 @@ Viele neue features wie
 
 ### Für Nutzung der Cookies aus den Browsern:
 * node → https://nodejs.org
-Man muss in ein beliebigen Browser *(z.B.: Firefox)* eingeloggt sein und dann in dieser GUI unter `Speicherorte & Optionen` ganz unten den jeweiligen Browser auswählen für den Import.
+
+Man muss in ein beliebigen Browser *(z.B.: Firefox)* bei Youtube eingeloggt sein und dann in dieser GUI unter `Speicherorte & Optionen` ganz unten den jeweiligen Browser auswählen für den Import. Das sollte mögliches Boting reduzieren oder bzw. umgehen.
 
 #### Installation via pip
 ```
