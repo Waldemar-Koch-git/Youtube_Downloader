@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-__version__ = '4.34.2 beta'
+__version__ = '4.34.3 beta'
 
 """
 YouTube Downloader GUI
@@ -10,7 +10,7 @@ aus YouTube-Links mit modernem Design und verbessertem Workflow.
 
 License: MIT
 """
-# pip install mutagen imageio-ffmpeg yt-dlp[default] 
+# pip install mutagen yt-dlp[default] 
 
 # mutagen for opus files (just only write thumpnail into file)
 # empfohlen: node installieren für die login cokies, um nicht als bot verdächtigt zu werden.
@@ -18,7 +18,6 @@ License: MIT
 import os
 import re
 import threading
-import imageio_ffmpeg as ffmpeg
 import yt_dlp
 from tkinter import *
 from tkinter import ttk, filedialog, messagebox
@@ -1748,8 +1747,17 @@ class YouTubeDownloaderApp:
         keine Bilddateien auf die Platte schreibt.
         """
         import shutil
+        # ffmpeg-Pfad über yt-dlp ermitteln (kein imageio_ffmpeg nötig).
+        # FFmpegPostProcessor kennt alle yt-dlp-eigenen Such-Pfade (inkl. Bundle).
+        try:
+            from yt_dlp.postprocessor.ffmpeg import FFmpegPostProcessor
+            _tmp_ydl = yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True})
+            _ffpp = FFmpegPostProcessor(_tmp_ydl)
+            _ffmpeg_exe = _ffpp.executable or shutil.which('ffmpeg') or 'ffmpeg'
+        except Exception:
+            _ffmpeg_exe = shutil.which('ffmpeg') or 'ffmpeg'
         opts = {
-            'ffmpeg_location': ffmpeg.get_ffmpeg_exe(),
+            'ffmpeg_location': _ffmpeg_exe,
             'quiet':       False,
             'no_warnings': False,
         }
@@ -1782,7 +1790,7 @@ class YouTubeDownloaderApp:
         """
         opts = self._base_opts()
 
-        # ffprobe neben ffmpeg suchen (imageio_ffmpeg liefert nur ffmpeg.exe)
+        # ffprobe neben ffmpeg suchen
         ffmpeg_exe = opts.get('ffmpeg_location', '')
         if ffmpeg_exe:
             ffprobe_candidate = os.path.join(
