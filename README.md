@@ -1,12 +1,10 @@
 # Install
 ## Externe Bibliotheken
 * yt-dlp
-
-ffmpeg bereits in yt-dlp mit integriert
-
+* imageio-ffmpeg
 ### Installation via pip
 ```
-pip install yt-dlp
+pip install imageio-ffmpeg yt-dlp
 ```
 
 # GUI
@@ -46,7 +44,8 @@ Viele neue features wie
 ## Install
 
 ### Externe Bibliotheken
-* yt-dlp[default] → YT-Bib inkl. ffmpeg
+* yt-dlp[default] → YT-Bib
+* imageio-ffmpeg → Konverter
 * mutagen → (Tags platzsparend beschreiben inkl. verkleinerter Cover-größe)
 
 ### Für Nutzung der Cookies aus den Browsern:
@@ -56,6 +55,6 @@ Man muss in ein beliebigen Browser *(z.B.: Firefox)* bei Youtube eingeloggt sein
 
 #### Installation via pip
 ```
-pip install mutagen yt-dlp[default]
+pip install mutagen imageio-ffmpeg yt-dlp[default]
 ```
 
