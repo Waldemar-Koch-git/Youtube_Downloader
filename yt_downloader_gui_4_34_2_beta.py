@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-__version__ = '4.34.1 beta'
+__version__ = '4.34.2 beta'
 
 """
 YouTube Downloader GUI
@@ -488,11 +488,8 @@ def _parse_yt_url(url: str) -> dict:
       }
     """
     qs = parse_qs(urlparse(url).query)
-    video_id = None
-    if 'watch?v=' in url:
-        video_id = url.split('watch?v=')[1].split('&')[0].split('?')[0]
-    elif 'youtu.be/' in url:
-        video_id = url.split('youtu.be/')[1].split('?')[0].split('&')[0]
+    raw_id   = _extract_video_id(url)
+    video_id = raw_id if ('watch?v=' in url or 'youtu.be/' in url) else None
     list_id   = (qs.get('list') or [None])[0]
     index_raw = (qs.get('index') or [None])[0]
     index = int(index_raw) if index_raw and index_raw.isdigit() else None
@@ -642,8 +639,8 @@ class _BaseSelectionDialog(Toplevel):
         self._mode_var        = StringVar(value=default_mode)
         self._bitrate_var     = StringVar(value=default_bitrate)
         self._use_max_bitrate = BooleanVar(value=use_max_bitrate)
-        self._search_var      = StringVar()
-        self._filter_count_var = StringVar()
+        self._search_var      = StringVar()      # wird in _build() mit trace versehen
+        self._filter_count_var = StringVar()     # wird in _build() als Label-Quelle gesetzt
         self._list_canvas     = None   # wird in _build() gesetzt
         self._row_frames: list = []
         self._build()
@@ -674,13 +671,11 @@ class _BaseSelectionDialog(Toplevel):
         sf = ttk.Frame(self, padding=(8, 4))
         sf.pack(fill='x')
         ttk.Label(sf, text="🔍 Suche:", font=('Segoe UI', 9)).pack(side='left')
-        self._search_var = StringVar()
         search_entry = ttk.Entry(sf, textvariable=self._search_var,
                                  font=('Segoe UI', 9), width=40)
         search_entry.pack(side='left', padx=(4, 6), fill='x', expand=True)
         ttk.Button(sf, text="✕", width=3,
                    command=lambda: self._search_var.set('')).pack(side='left')
-        self._filter_count_var = StringVar()
         ttk.Label(sf, textvariable=self._filter_count_var,
                   font=('Segoe UI', 9), foreground='#555').pack(side='left', padx=(8, 0))
         self._search_var.trace_add('write', lambda *_: self._filter_rows())
@@ -2325,6 +2320,23 @@ class YouTubeDownloaderApp:
 
         return opts, dest
 
+    def _maybe_embed_thumbnail(self, opts: dict, fp: str):
+        """
+        Bettet das Thumbnail als JPEG ein – einheitliche Hilfsmethode,
+        die in _run_urls, dem Channel-Loop und download_custom genutzt wird.
+        """
+        if not fp:
+            return
+        low = fp.lower()
+        if low.endswith('.opus'):
+            _ff = opts.get('_opus_embed_ffmpeg', '')
+        elif low.endswith('.mp3'):
+            _ff = opts.get('_mp3_embed_ffmpeg', '')
+        else:
+            _ff = opts.get('_video_embed_ffmpeg', '')
+        if _ff:
+            _embed_thumbnail_as_jpeg(fp, _ff)
+
     def _run_urls(self, urls: list, mode: str, bitrate: str, prefix: str,
                   silent_errors: bool = False):
         """Lädt eine fertig aufgelöste URL-Liste herunter."""
@@ -2367,26 +2379,7 @@ class YouTubeDownloaderApp:
                     info = ydl.extract_info(url)
                     done.append(info.get('title', url))
                 _rename_after_download(final_path_ref, known_names)
-                # Opus-Thumbnail nachträglich als kleines JPEG einbetten
-                if (mode == 'audio_opus'
-                        and final_path_ref[0]
-                        and final_path_ref[0].lower().endswith('.opus')):
-                    _ff = base_opts.get('_opus_embed_ffmpeg', '')
-                    if _ff:
-                        _embed_thumbnail_as_jpeg(final_path_ref[0], _ff)
-                # MP3-Thumbnail: ebenfalls als kleines JPEG einbetten (statt PNG via yt-dlp)
-                elif (mode == 'audio_mp3'
-                        and final_path_ref[0]
-                        and final_path_ref[0].lower().endswith('.mp3')):
-                    _ff = base_opts.get('_mp3_embed_ffmpeg', '')
-                    if _ff:
-                        _embed_thumbnail_as_jpeg(final_path_ref[0], _ff)
-                # Video-Thumbnail: gleiche Logik – FFmpeg remux mit eingebettetem Cover
-                elif (mode in ('video_mp4', 'video_best')
-                        and final_path_ref[0]):
-                    _ff = base_opts.get('_video_embed_ffmpeg', '')
-                    if _ff:
-                        _embed_thumbnail_as_jpeg(final_path_ref[0], _ff)
+                self._maybe_embed_thumbnail(base_opts, final_path_ref[0])
             except Exception as e:
                 if self._cancel_flag:
                     break
@@ -2457,12 +2450,7 @@ class YouTubeDownloaderApp:
             p        = _parse_yt_url(urls[0])
             stored_list_id = pending.get('list_id')
 
-            url_belongs_to_playlist = (
-                # URL hat list= und passt zur gespeicherten Playlist
-                (p['list_id'] is not None and p['list_id'] == stored_list_id)
-                # oder reine Playlist-URL (kein video_id, list_id passt)
-                or (p['is_playlist'] and p['list_id'] == stored_list_id)
-            )
+            url_belongs_to_playlist = (p['list_id'] == stored_list_id)
 
             if url_belongs_to_playlist:
                 entries  = pending['entries']
@@ -2591,18 +2579,7 @@ class YouTubeDownloaderApp:
                             info_dl = ydl.extract_info(v_url)
                             done_ch.append(info_dl.get('title', v_url))
                         _rename_after_download(fp_ref, known)
-                        if (mode == 'audio_opus'
-                                and fp_ref[0]
-                                and fp_ref[0].lower().endswith('.opus')):
-                            _ff = base_opts_ch.get('_opus_embed_ffmpeg', '')
-                            if _ff:
-                                _embed_thumbnail_as_jpeg(fp_ref[0], _ff)
-                        elif (mode == 'audio_mp3'
-                                and fp_ref[0]
-                                and fp_ref[0].lower().endswith('.mp3')):
-                            _ff = base_opts_ch.get('_mp3_embed_ffmpeg', '')
-                            if _ff:
-                                _embed_thumbnail_as_jpeg(fp_ref[0], _ff)
+                        self._maybe_embed_thumbnail(base_opts_ch, fp_ref[0])
                     except Exception as e:
                         if self._cancel_flag:
                             break
@@ -2662,41 +2639,20 @@ class YouTubeDownloaderApp:
     #  Schnell-Download-Methoden
     # ═════════════════════════════════════════════════════════════════════════
 
-    def quick_audio_mp3(self):
+    def _quick_download(self, mode: str, bitrate: str, label: str):
+        """Gemeinsamer Thread-Starter für alle Schnell-Download-Schaltflächen."""
         def t():
             urls = self._get_urls()
             if not urls:
                 messagebox.showwarning("Fehler", "Keine URL eingegeben!")
                 return
-            self._resolve_and_run(urls, 'audio_mp3', '0', "🎵 Audio (MP3) lädt...")
+            self._resolve_and_run(urls, mode, bitrate, label)
         Thread(target=t, daemon=True).start()
 
-    def quick_audio_opus(self):
-        def t():
-            urls = self._get_urls()
-            if not urls:
-                messagebox.showwarning("Fehler", "Keine URL eingegeben!")
-                return
-            self._resolve_and_run(urls, 'audio_opus', '0', "🎙 Audio (Opus) lädt...")
-        Thread(target=t, daemon=True).start()
-
-    def quick_video_mp4(self):
-        def t():
-            urls = self._get_urls()
-            if not urls:
-                messagebox.showwarning("Fehler", "Keine URL eingegeben!")
-                return
-            self._resolve_and_run(urls, 'video_mp4', '192', "🎬 Video (MP4) lädt...")
-        Thread(target=t, daemon=True).start()
-
-    def quick_video_best(self):
-        def t():
-            urls = self._get_urls()
-            if not urls:
-                messagebox.showwarning("Fehler", "Keine URL eingegeben!")
-                return
-            self._resolve_and_run(urls, 'video_best', '192', "⭐ Video Max lädt...")
-        Thread(target=t, daemon=True).start()
+    def quick_audio_mp3(self):   self._quick_download('audio_mp3',  '0',   "🎵 Audio (MP3) lädt...")
+    def quick_audio_opus(self):  self._quick_download('audio_opus', '0',   "🎙 Audio (Opus) lädt...")
+    def quick_video_mp4(self):   self._quick_download('video_mp4',  '192', "🎬 Video (MP4) lädt...")
+    def quick_video_best(self):  self._quick_download('video_best', '192', "⭐ Video Max lädt...")
 
     # Kompatibilitäts-Aliase
     def download_audio(self):      self.quick_audio_mp3()
@@ -2840,23 +2796,7 @@ class YouTubeDownloaderApp:
                         info = ydl.extract_info(url)
                         done.append(info.get('title', url))
                     _rename_after_download(final_path_ref, known_names_custom)
-                    # Opus-Thumbnail nachträglich als kleines JPEG einbetten
-                    if (item_opts.get('_opus_embed_ffmpeg')
-                            and final_path_ref[0]
-                            and final_path_ref[0].lower().endswith('.opus')):
-                        _embed_thumbnail_as_jpeg(
-                            final_path_ref[0], item_opts['_opus_embed_ffmpeg'])
-                    # MP3-Thumbnail: ebenfalls als kleines JPEG einbetten
-                    elif (item_opts.get('_mp3_embed_ffmpeg')
-                            and final_path_ref[0]
-                            and final_path_ref[0].lower().endswith('.mp3')):
-                        _embed_thumbnail_as_jpeg(
-                            final_path_ref[0], item_opts['_mp3_embed_ffmpeg'])
-                    # Video-Thumbnail: gleiche Logik – FFmpeg remux mit eingebettetem Cover
-                    elif (item_opts.get('_video_embed_ffmpeg')
-                            and final_path_ref[0]):
-                        _embed_thumbnail_as_jpeg(
-                            final_path_ref[0], item_opts['_video_embed_ffmpeg'])
+                    self._maybe_embed_thumbnail(item_opts, final_path_ref[0])
                 except Exception as e:
                     if self._cancel_flag:
                         break
