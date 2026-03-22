@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-__version__ = '4.33.0 beta'
+__version__ = '4.33.4 beta'
 
 """
 YouTube Downloader GUI
@@ -10,7 +10,7 @@ aus YouTube-Links mit modernem Design und verbessertem Workflow.
 
 License: MIT
 """
-# pip install imageio-ffmpeg yt-dlp mutagen
+# pip install mutagen imageio-ffmpeg yt-dlp[default] 
 
 # mutagen for opus files (just only write thumpnail into file)
 
@@ -333,20 +333,21 @@ def _rename_after_download(final_path_ref: list, known_names: set):
 
 
 
-def _embed_thumbnail_as_jpeg(audio_fp: str, ffmpeg_exe: str):
+def _embed_thumbnail_as_jpeg(media_fp: str, ffmpeg_exe: str):
     """
-    Sucht die zum audio_fp gehörende Thumbnail-Datei (.webp/.jpg/.png),
+    Sucht die zum media_fp gehörende Thumbnail-Datei (.webp/.jpg/.png),
     konvertiert sie zu einem kleinen JPEG (500px, q:v 4 ≈ 30–50 KB)
-    und bettet sie via mutagen ein:
-      • .opus  → OggOpus  (metadata_block_picture / FLAC Picture)
-      • .mp3   → ID3 APIC-Tag
+    und bettet sie ein:
+      • .opus      → OggOpus  (metadata_block_picture / FLAC Picture) via mutagen
+      • .mp3       → ID3 APIC-Tag via mutagen
+      • .mp4/.mkv  → FFmpeg remux mit eingebettetem Cover (kein mutagen nötig)
     Thumbnail-Temp-Datei wird danach gelöscht.
     """
     import subprocess as _sp
-    if not audio_fp or not os.path.isfile(audio_fp):
+    if not media_fp or not os.path.isfile(media_fp):
         return
-    ext_lower = os.path.splitext(audio_fp)[1].lower()
-    stem = os.path.splitext(audio_fp)[0]
+    ext_lower = os.path.splitext(media_fp)[1].lower()
+    stem = os.path.splitext(media_fp)[0]
     th_src = ''
     for ext2 in ('.webp', '.jpg', '.jpeg', '.png'):
         cand = stem + ext2
@@ -376,7 +377,7 @@ def _embed_thumbnail_as_jpeg(audio_fp: str, ffmpeg_exe: str):
             pic.mime = 'image/jpeg'
             pic.desc = 'Cover'
             pic.data = jpg_data
-            audio = OggOpus(audio_fp)
+            audio = OggOpus(media_fp)
             audio['metadata_block_picture'] = [
                 base64.b64encode(pic.write()).decode('ascii')
             ]
@@ -385,7 +386,7 @@ def _embed_thumbnail_as_jpeg(audio_fp: str, ffmpeg_exe: str):
         elif ext_lower == '.mp3':
             from mutagen.id3 import ID3, APIC, error as ID3Error
             try:
-                tags = ID3(audio_fp)
+                tags = ID3(media_fp)
             except ID3Error:
                 tags = ID3()
             tags.delall('APIC')
@@ -396,7 +397,27 @@ def _embed_thumbnail_as_jpeg(audio_fp: str, ffmpeg_exe: str):
                 desc='Cover',
                 data=jpg_data,
             ))
-            tags.save(audio_fp, v2_version=3)
+            tags.save(media_fp, v2_version=3)
+
+        elif ext_lower in ('.mp4', '.mkv', '.webm'):
+            # FFmpeg remux: Original + Cover → Temp-Datei → Original ersetzen
+            tmp_out = stem + '_covtmp' + ext_lower
+            try:
+                _sp.run(
+                    [ffmpeg_exe, '-y',
+                     '-i', media_fp, '-i', th_jpg,
+                     '-map', '0', '-map', '1',
+                     '-c', 'copy',
+                     '-disposition:v:1', 'attached_pic',
+                     tmp_out],
+                    stdout=_sp.DEVNULL, stderr=_sp.DEVNULL, check=True)
+                os.replace(tmp_out, media_fp)
+            except Exception:
+                if os.path.isfile(tmp_out):
+                    try:
+                        os.remove(tmp_out)
+                    except OSError:
+                        pass
 
     except Exception:
         pass
@@ -1709,14 +1730,23 @@ class YouTubeDownloaderApp:
         Kein writethumbnail, keine Postprocessoren – damit die Analyse
         keine Bilddateien auf die Platte schreibt.
         """
+        import shutil
         opts = {
             'ffmpeg_location': ffmpeg.get_ffmpeg_exe(),
             'quiet':       False,
             'no_warnings': False,
         }
+        # Node.js als JS-Runtime registrieren (yt-dlp sucht sonst nur nach Deno).
+        # Das interne Format ist ein Dict: {'runtime_name': {optionaler 'path': ...}}
+        # Unterstützte Keys: 'deno', 'node', 'bun', 'quickjs'
+        node_path = shutil.which('node')
+        if node_path:
+            opts['js_runtimes'] = {'node': {'path': node_path}}
         browser = self.cookies_browser_var.get().strip()
         if browser:
-            opts['cookiesfrombrowser'] = (browser,)
+            # cookiesfrombrowser erwartet ein Tuple: (browser, profile, keyring, container)
+            # Fehlende Felder mit None auffüllen damit yt-dlp nicht abstürzt
+            opts['cookiesfrombrowser'] = (browser, None, None, None)
         return opts
 
     def _download_opts(self, mode: str = '') -> dict:
@@ -1753,9 +1783,8 @@ class YouTubeDownloaderApp:
                 'add_chapters': False,
             })
         if self.write_thumbnail_var.get():
+            opts['writethumbnail'] = True
             if not is_video:
-                opts['writethumbnail'] = True
-
                 if mode == 'audio_mp3':
                     # ── MP3: EmbedThumbnail NICHT an yt-dlp delegieren ──────
                     # yt-dlp konvertiert .webp → .png (unkomprimiert, ~500-800 KB!)
@@ -1779,7 +1808,13 @@ class YouTubeDownloaderApp:
                     # Andere Audio-Formate: Standard yt-dlp EmbedThumbnail
                     pps.append({'key': 'EmbedThumbnail'})
 
-            # Bei Video: kein writethumbnail → keine Bilddatei wird erzeugt
+            else:
+                # ── Video: gleiche Logik wie Audio ──────────────────────────
+                # _embed_thumbnail_as_jpeg übernimmt den Job nach dem Download:
+                # .webp/.jpg → JPEG 500px → FFmpeg remux (kein yt-dlp EmbedThumbnail).
+                opts['convert_thumbnails'] = False
+                opts['_video_embed_ffmpeg'] = opts.get('ffmpeg_location') or 'ffmpeg'
+                # EmbedThumbnail bewusst NICHT in pps einfügen
         if pps:
             opts['postprocessors'] = pps
         return opts
@@ -2314,6 +2349,12 @@ class YouTubeDownloaderApp:
                     _ff = base_opts.get('_mp3_embed_ffmpeg', '')
                     if _ff:
                         _embed_thumbnail_as_jpeg(final_path_ref[0], _ff)
+                # Video-Thumbnail: gleiche Logik – FFmpeg remux mit eingebettetem Cover
+                elif (mode in ('video_mp4', 'video_best')
+                        and final_path_ref[0]):
+                    _ff = base_opts.get('_video_embed_ffmpeg', '')
+                    if _ff:
+                        _embed_thumbnail_as_jpeg(final_path_ref[0], _ff)
             except Exception as e:
                 if self._cancel_flag:
                     break
@@ -2777,6 +2818,11 @@ class YouTubeDownloaderApp:
                             and final_path_ref[0].lower().endswith('.mp3')):
                         _embed_thumbnail_as_jpeg(
                             final_path_ref[0], item_opts['_mp3_embed_ffmpeg'])
+                    # Video-Thumbnail: gleiche Logik – FFmpeg remux mit eingebettetem Cover
+                    elif (item_opts.get('_video_embed_ffmpeg')
+                            and final_path_ref[0]):
+                        _embed_thumbnail_as_jpeg(
+                            final_path_ref[0], item_opts['_video_embed_ffmpeg'])
                 except Exception as e:
                     if self._cancel_flag:
                         break
