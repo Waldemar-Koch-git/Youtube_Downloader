@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-__version__ = '5.0.1'
+__version__ = '5.0.2'
 
 """
 YouTube Downloader GUI
@@ -8,12 +8,12 @@ YouTube Downloader GUI
 Eine benutzerfreundliche grafische Oberfläche zum Herunterladen von Audio und Video
 aus YouTube-Links mit modernem Design und verbessertem Workflow.
 
+Author: Waldemar Koch
+Co-Author: E.S.
+Updated: 2026 März 27
 License: MIT
 """
 # pip install mutagen static-ffmpeg yt-dlp[default]
-
-# mutagen for opus files (just only write thumpnail into file)
-# empfohlen: node installieren für die login cookies, um nicht als bot verdächtigt zu werden.
 
 import os
 import re
@@ -54,9 +54,9 @@ _UNAVAIL_TITLES = {
 
 MODES = [
     ("🎵 Audio (MP3)",       "audio_mp3"),
-    ("🎙 Audio (Opus)",      "audio_opus"),
+    ("🎵 Audio (Opus)",      "audio_opus"),
     ("🎬 Video (MP4)",       "video_mp4"),
-    ("⭐ Video (Best)",      "video_best"),
+    ("🎬 Video (Best)",      "video_best"),
 ]
 MODES_DICT = dict(MODES)
 
@@ -754,7 +754,7 @@ class _BaseSelectionDialog(Toplevel):
         ttk.Button(foot, text="✕ Abbrechen",
                    command=self._cancel).pack(side='right', padx=(6, 0))
         ttk.Button(foot, text="📋✔ Auswahl merken",
-                   style='Primary.TButton', command=self._ok).pack(side='right')
+                   style='Playlist.TButton', command=self._ok).pack(side='right')
 
     # ── Shared-Logik ──────────────────────────────────────────────────────────
 
@@ -1075,10 +1075,10 @@ class MultiURLDialog(_BaseSelectionDialog):
 class YouTubeDownloaderApp:
     def __init__(self, root):
         self.root = root
-        self.root.title(f"YouTube Downloader v{__version__}")
-        self.ui_WEITE = 750
+        self.root.title(f"YouTube Downloader v{__version__}  🎵 + 🎬")
+        self.ui_WEITE = 600
         self.root.geometry(f"{self.ui_WEITE}x600")
-        self.root.minsize(680, 700)
+        self.root.minsize(600, 600)
 
         try:
             self.root.iconbitmap("yt_symbol_small.ico")
@@ -1228,12 +1228,11 @@ class YouTubeDownloaderApp:
         s = ttk.Style()
         s.theme_use('clam')
         s.configure('Primary.TButton',
-                    padding=10, font=('Segoe UI', 10, 'bold'), background="#2196F3")
+                    padding=8, font=('Segoe UI', 10, 'bold'), background="#2196F3")  # blau:2196F3
         s.configure('Action.TButton',
-                    padding=12, font=('Segoe UI', 11, 'bold'), background="#4CAF50") # blau:2196F3 gruen:4CAF50
+                    padding=8, font=('Segoe UI', 10, 'bold'), background="#4CAF50")  # gruen:4CAF50
         s.configure('Secondary.TButton', padding=8, font=('Segoe UI', 9))
-        s.configure('Playlist.TButton',  padding=8, font=('Segoe UI', 9, 'bold'),
-                    background="#2196F3")
+        s.configure('Playlist.TButton',  padding=8, font=('Segoe UI', 10, 'bold'), background="#2196F3")
         s.configure('Title.TLabel',
                     font=('Segoe UI', 16, 'bold'), foreground="#FF0000")
         s.configure('Subtitle.TLabel', font=('Segoe UI', 11, 'bold'))
@@ -1249,7 +1248,7 @@ class YouTubeDownloaderApp:
 
     # ─────────────────────────────────────────────────────────────────────────
     def create_widgets(self):
-        mf = ttk.Frame(self._inner, padding="18")
+        mf = ttk.Frame(self._inner, padding="4")
         mf.grid(row=0, column=0, sticky='nsew')
         self._inner.columnconfigure(0, weight=1)
         mf.columnconfigure(0, weight=1)
@@ -1257,9 +1256,8 @@ class YouTubeDownloaderApp:
         r = 0
 
         # ── Titel ────────────────────────────────────────────────────────────
-        ttk.Label(mf, text="🎬 YouTube Downloader",
-                  style='Title.TLabel').grid(row=r, column=0, pady=(0, 14), sticky='n')
-        r += 1
+        #ttk.Label(mf, text="🎬 YouTube Downloader", style='Title.TLabel').grid(row=r, column=0, pady=(0, 4), sticky='n')
+        #r += 1
 
         # ── URL-Eingabe ──────────────────────────────────────────────────────
         uf = ttk.LabelFrame(mf,
@@ -1366,11 +1364,11 @@ class YouTubeDownloaderApp:
         btn_row.grid(row=0, column=0, sticky='n')
         for txt, cmd in [
             ("🎵 Audio (MP3)",  self.quick_audio_mp3),
-            ("🎙 Audio (Opus)", self.quick_audio_opus),
+            ("🎵 Audio (Opus)", self.quick_audio_opus),
             ("🎬 Video (MP4)",  self.quick_video_mp4),
-            ("⭐ Video (Best)", self.quick_video_best),
+            ("🎬 Video (Best)", self.quick_video_best),
         ]:
-            ttk.Button(btn_row, text=txt, style='Primary.TButton',
+            ttk.Button(btn_row, text=txt, style='Action.TButton',
                        command=cmd, width=16).pack(side='left', padx=4)
 
         ttk.Label(self._qd_frame,
@@ -1431,7 +1429,7 @@ class YouTubeDownloaderApp:
         r += 1
 
         self._adv_toggle_lbl = StringVar(
-            value="▶  Erweiterte Optionen (Einzelvideo)  –  zum Aufklappen klicken")
+            value="▶  🛠 Erweiterte Optionen (Einzelvideo)  –  zum Aufklappen klicken")
         lbl_adv = ttk.Label(adv_header, textvariable=self._adv_toggle_lbl,
                   font=('Segoe UI', 10, 'bold'), foreground='#1565C0', cursor='hand2')
         lbl_adv.grid(row=0, column=0, sticky='w')
@@ -1444,7 +1442,7 @@ class YouTubeDownloaderApp:
         self._sec_adv = {
             'expanded': False, 'frame': self._adv_frame,
             'grid_row': r, 'lbl_var': self._adv_toggle_lbl,
-            'icon_text': "Erweiterte Optionen (Einzelvideo)", 'pady': (0, 10),
+            'icon_text': "🛠 Erweiterte Optionen (Einzelvideo)", 'pady': (0, 10),
         }
         r += 1
 
@@ -2657,9 +2655,9 @@ class YouTubeDownloaderApp:
         Thread(target=t, daemon=True).start()
 
     def quick_audio_mp3(self):   self._quick_download('audio_mp3',  '0', "🎵 Audio (MP3) lädt...")
-    def quick_audio_opus(self):  self._quick_download('audio_opus', '0', "🎙 Audio (Opus) lädt...")
+    def quick_audio_opus(self):  self._quick_download('audio_opus', '0', "🎵 Audio (Opus) lädt...")
     def quick_video_mp4(self):   self._quick_download('video_mp4',  '0', "🎬 Video (MP4) lädt...")
-    def quick_video_best(self):  self._quick_download('video_best', '0', "⭐ Video Max lädt...")
+    def quick_video_best(self):  self._quick_download('video_best', '0', "🎬 Video Max lädt...")
 
     # Kompatibilitäts-Aliase
     def download_audio(self):      self.quick_audio_mp3()
