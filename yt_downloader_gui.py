@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-__version__ = '5.0'
+__version__ = '5.0.1'
 
 """
 YouTube Downloader GUI
@@ -73,9 +73,9 @@ _CONFIG_SCHEMA: dict[str, tuple[str, object]] = {
     'audio_path':         ('str',  ''),
     'video_path':         ('str',  ''),
     'audio_to_mp3':       ('bool', True),
-    'audio_format':       ('str',  'mp3'),
+    'audio_format':       ('str',  'original'),
     'video_to_mp4':       ('bool', True),
-    'video_format':       ('str',  'mp4'),
+    'video_format':       ('str',  'original'),
     'mp3_bitrate':        ('str',  '320'),
     'open_folder':        ('bool', False),
     'write_tags':         ('bool', True),
@@ -753,8 +753,8 @@ class _BaseSelectionDialog(Toplevel):
             v.trace_add('write', lambda *_: self._upd_count())
         ttk.Button(foot, text="✕ Abbrechen",
                    command=self._cancel).pack(side='right', padx=(6, 0))
-        ttk.Button(foot, text="✔ Ausgewählte herunterladen",
-                   style='Action.TButton', command=self._ok).pack(side='right')
+        ttk.Button(foot, text="📋✔ Auswahl merken",
+                   style='Primary.TButton', command=self._ok).pack(side='right')
 
     # ── Shared-Logik ──────────────────────────────────────────────────────────
 
@@ -827,7 +827,7 @@ class PlaylistDialog(_BaseSelectionDialog):
     checked_indices   – Set[int]: welche Einträge beim letzten Öffnen angehakt waren.
                         None bedeutet: Standardverhalten (alle downloadbaren an).
     downloaded_stems  – dict[str, str]: stem → 'audio'|'video', Dateien im Zielordner.
-                        Passende Einträge werden hellgrün markiert + Symbol angezeigt.
+                        Passende Einträge werden weiß markiert + Symbol angezeigt.
     """
 
     # Hintergrundfarben
@@ -1089,9 +1089,9 @@ class YouTubeDownloaderApp:
         self.audio_path_var    = StringVar()
         self.video_path_var    = StringVar()
         self.audio_to_mp3_var  = BooleanVar(value=True)
-        self.audio_format_var  = StringVar(value="mp3")   # "original" | "opus" | "mp3"
+        self.audio_format_var  = StringVar(value="original")   # "original" | "opus" | "mp3"
         self.video_to_mp4_var  = BooleanVar(value=True)
-        self.video_format_var  = StringVar(value="mp4")   # "original" | "mp4" | "mkv"
+        self.video_format_var  = StringVar(value="original")   # "original" | "mp4" | "mkv"
         self.mp3_bitrate_var   = StringVar(value="320")
         self.quick_bitrate_var = StringVar(value="320")
         self.open_folder_var      = BooleanVar(value=False)
@@ -1230,7 +1230,7 @@ class YouTubeDownloaderApp:
         s.configure('Primary.TButton',
                     padding=10, font=('Segoe UI', 10, 'bold'), background="#2196F3")
         s.configure('Action.TButton',
-                    padding=12, font=('Segoe UI', 11, 'bold'), background="#4CAF50")
+                    padding=12, font=('Segoe UI', 11, 'bold'), background="#4CAF50") # blau:2196F3 gruen:4CAF50
         s.configure('Secondary.TButton', padding=8, font=('Segoe UI', 9))
         s.configure('Playlist.TButton',  padding=8, font=('Segoe UI', 9, 'bold'),
                     background="#2196F3")
@@ -1410,7 +1410,7 @@ class YouTubeDownloaderApp:
         ttk.Button(pl_btn_row, text="📋 Playlist bearbeiten",
                    command=self.open_playlist_editor,
                    style='Playlist.TButton', width=22).pack(side='left', padx=4)
-        ttk.Button(pl_btn_row, text="▶ Playlist herunterladen",
+        ttk.Button(pl_btn_row, text="▶ Playlist herunterladen 📥",
                    command=self.download_pending_playlist,
                    style='Action.TButton', width=22).pack(side='left', padx=4)
 
@@ -1470,8 +1470,13 @@ class YouTubeDownloaderApp:
         for lbl, val in [("Original", "original"), ("MP4", "mp4"), ("MKV", "mkv")]:
             ttk.Radiobutton(video_opts, text=lbl, variable=self.video_format_var,
                             value=val).pack(side='left', padx=(0, 4))
-        ttk.Checkbutton(video_opts, text="Video ignorieren",
-                        variable=self.ignore_video_var).pack(side='left', padx=(16, 0))
+        #ttk.Checkbutton(video_opts, text="Video ignorieren",
+        #                variable=self.ignore_video_var).pack(side='left', padx=(16, 0))
+        ttk.Separator(video_lf, orient='horizontal').grid(row=2, column=0, sticky='ew', pady=(6, 4))
+        ignore_video_row = ttk.Frame(video_lf)
+        ignore_video_row.grid(row=3, column=0, sticky='w')
+        ttk.Checkbutton(ignore_video_row, text="Video ignorieren",
+                        variable=self.ignore_video_var).pack(side='left')
 
         # ── Bereich: Audio Stream ─────────────────────────────────────────────
         audio_lf = ttk.LabelFrame(self._adv_frame, text="Audio Stream", padding=(8, 4))
@@ -1510,7 +1515,7 @@ class YouTubeDownloaderApp:
         ttk.Checkbutton(ignore_audio_row, text="Audio ignorieren",
                         variable=self.ignore_audio_var).pack(side='left')
 
-        ttk.Button(self._adv_frame, text="📥 Mit Auswahl herunterladen",
+        ttk.Button(self._adv_frame, text="▶ Mit Auswahl herunterladen 📥",
                    command=self.download_custom,
                    style='Action.TButton').grid(
             row=2, column=0, columnspan=2, pady=(4, 0))
@@ -2651,10 +2656,10 @@ class YouTubeDownloaderApp:
             self._resolve_and_run(urls, mode, bitrate, label)
         Thread(target=t, daemon=True).start()
 
-    def quick_audio_mp3(self):   self._quick_download('audio_mp3',  '0',   "🎵 Audio (MP3) lädt...")
-    def quick_audio_opus(self):  self._quick_download('audio_opus', '0',   "🎙 Audio (Opus) lädt...")
-    def quick_video_mp4(self):   self._quick_download('video_mp4',  '192', "🎬 Video (MP4) lädt...")
-    def quick_video_best(self):  self._quick_download('video_best', '192', "⭐ Video Max lädt...")
+    def quick_audio_mp3(self):   self._quick_download('audio_mp3',  '0', "🎵 Audio (MP3) lädt...")
+    def quick_audio_opus(self):  self._quick_download('audio_opus', '0', "🎙 Audio (Opus) lädt...")
+    def quick_video_mp4(self):   self._quick_download('video_mp4',  '0', "🎬 Video (MP4) lädt...")
+    def quick_video_best(self):  self._quick_download('video_best', '0', "⭐ Video Max lädt...")
 
     # Kompatibilitäts-Aliase
     def download_audio(self):      self.quick_audio_mp3()
