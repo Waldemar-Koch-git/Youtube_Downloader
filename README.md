@@ -3,6 +3,10 @@
 Eine benutzerfreundliche grafische Oberfläche zum Herunterladen von Audio und Video aus YouTube-Links – mit modernem Design, Playlist-Support, Cover-Einbettung und flexibler Stream-Auswahl.
 
 ![GUI](./images_/GUI.jpg)
+<div style="display: flex; gap: 10px;">
+  <img src="./images_/GUI_demo_1.jpg" alt="GUI Demo 1" style="width: 49%;">
+  <img src="./images_/GUI_demo_2.jpg" alt="GUI Demo 2" style="width: 49%;">
+</div>
 
 ---
 
