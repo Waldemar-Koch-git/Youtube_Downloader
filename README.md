@@ -39,8 +39,10 @@ Eine benutzerfreundliche grafische Oberfläche zum Herunterladen von Audio und V
 
 ### Python-Bibliotheken
 
+#### Windows
+
 ```
-pip install mutagen static-ffmpeg yt-dlp[default]
+pip install mutagen static-ffmpeg "yt-dlp[default]"
 ```
 
 | Paket | Zweck |
@@ -49,7 +51,24 @@ pip install mutagen static-ffmpeg yt-dlp[default]
 | `static-ffmpeg` | Stellt FFmpeg & ffprobe automatisch bereit (kein manuelles Installieren nötig) |
 | `mutagen` | Tags & Cover platzsparend in Audio-Dateien schreiben |
 
-> **Hinweis zu FFmpeg:** Wird beim ersten Programmstart automatisch heruntergeladen und lokal gecacht. Keine manuelle Installation erforderlich.
+> **Hinweis zu FFmpeg (Windows):** Wird beim ersten Programmstart automatisch heruntergeladen und lokal gecacht. Keine manuelle Installation erforderlich.
+
+#### Linux / macOS
+
+Einmaliger Setup – Systempakete und Python-Bibliotheken:
+
+```bash
+# Ubuntu/Debian
+sudo apt install -y ffmpeg python3-tk nodejs
+
+# macOS (Homebrew)
+brew install ffmpeg python-tk node
+
+# Python-Pakete (kein static-ffmpeg nötig)
+pip install "yt-dlp[default]" mutagen
+```
+
+> **Hinweis zu `static-ffmpeg`:** Unter Linux/macOS wird `static-ffmpeg` nicht benötigt und kann weggelassen werden. Das Skript erkennt das automatisch.
 
 ### Automatisches Update-Skript (Windows)
 
@@ -73,6 +92,18 @@ python yt_downloader_gui.py
 ```
 
 Oder doppelklick auf die Datei.
+
+---
+
+## Fehlerbehebung
+
+| Problem | Lösung |
+|---|---|
+| `No module named tkinter` | `sudo apt install python3-tk` |
+| `ffmpeg: command not found` | `sudo apt install ffmpeg` |
+| `ModuleNotFoundError: yt_dlp` | `pip install yt-dlp` |
+| 429-Fehler / Age-Gate | Cookies-Browser in den Einstellungen wählen |
+| Ordner öffnet sich nicht | `sudo apt install xdg-utils` |
 
 ---
 
