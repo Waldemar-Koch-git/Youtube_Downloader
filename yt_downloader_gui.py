@@ -1,40 +1,99 @@
 # -*- coding: utf-8 -*-
 
-__version__ = '5.0.2'
+__version__ = '5.0.4'
 
 """
-YouTube Downloader GUI
+YouTube Downloader GUI  –  Plattformunabhängig (Windows / Linux / macOS)
 
 Eine benutzerfreundliche grafische Oberfläche zum Herunterladen von Audio und Video
 aus YouTube-Links mit modernem Design und verbessertem Workflow.
 
-Author: Waldemar Koch
+Author:  Waldemar Koch
 Co-Author: E.S.
-Updated: 2026 März 27
+Updated: 2026 April 01
 License: MIT
+
+Systemvoraussetzungen
+─────────────────────
+Windows:
+  pip install mutagen static-ffmpeg yt-dlp[default]
+  (static_ffmpeg lädt FFmpeg automatisch herunter)
+
+Linux (Debian/Ubuntu):
+  sudo apt install -y ffmpeg python3-tk nodejs
+  pip install "yt-dlp[default]" mutagen
+
+macOS:
+  brew install ffmpeg python-tk node
+  pip install "yt-dlp[default]" mutagen
+
+Node.js ist optional, wird aber von yt-dlp für bestimmte YouTube-Seiten benötigt.
 """
-# pip install mutagen static-ffmpeg yt-dlp[default]
 
 import os
 import re
 import shutil
 import threading
-import static_ffmpeg
+import platform
 import yt_dlp
 from tkinter import *
 from tkinter import ttk, filedialog, messagebox
 from threading import Thread
-from os import path, makedirs, system
+from os import path, makedirs
 from subprocess import Popen
 from urllib.parse import urlparse, parse_qs
 
-system(f"title YouTube Downloader - Version {__version__}")
+# ─────────────────────────────────────────────────────────────────────────────
+#  Plattformerkennung
+# ─────────────────────────────────────────────────────────────────────────────
+IS_WINDOWS = platform.system() == 'Windows'
+IS_LINUX   = platform.system() == 'Linux'
+IS_MAC     = platform.system() == 'Darwin'
 
-# FFmpeg + ffprobe einmalig beim Start bereitstellen.
-# static_ffmpeg lädt beim ersten Aufruf eine statische Binary herunter
-# und cached sie lokal; danach ist shutil.which('ffmpeg') und
-# shutil.which('ffprobe') auf allen Plattformen zuverlässig befüllt.
-static_ffmpeg.add_paths()
+# Fenstertitel nur unter Windows über os.system() setzen;
+# unter Linux/macOS übernimmt Tkinter den Fenstertitel direkt.
+if IS_WINDOWS:
+    from os import system
+    system(f'title YouTube Downloader - Version {__version__}')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  FFmpeg + ffprobe bereitstellen
+# ─────────────────────────────────────────────────────────────────────────────
+def _setup_ffmpeg():
+    """
+    Stellt sicher, dass ffmpeg und ffprobe verfügbar sind.
+
+    Windows:  static_ffmpeg lädt beim ersten Aufruf eine statische Binary
+              herunter und cached sie lokal; danach ist shutil.which('ffmpeg')
+              und shutil.which('ffprobe') auf Windows zuverlässig befüllt.
+
+    Linux/macOS:  ffmpeg muss systemweit installiert sein (apt / brew).
+                  Fehlt es, wird eine Warnung in der Konsole ausgegeben.
+    """
+    if IS_WINDOWS:
+        try:
+            import static_ffmpeg
+            static_ffmpeg.add_paths()
+        except ImportError:
+            print('Warnung: static_ffmpeg nicht installiert – '
+                  'ffmpeg muss manuell im PATH sein.')
+    else:
+        if not shutil.which('ffmpeg'):
+            print('\n' + '!' * 60)
+            print('FFmpeg nicht gefunden! Bitte installieren:')
+            if IS_LINUX:
+                print('  sudo apt update && sudo apt install ffmpeg')
+            elif IS_MAC:
+                print('  brew install ffmpeg')
+            print('!' * 60 + '\n')
+        if not shutil.which('ffprobe'):
+            print('Warnung: ffprobe nicht gefunden – '
+                  'einige Funktionen könnten eingeschränkt sein.')
+
+
+_setup_ffmpeg()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Konstanten
@@ -53,10 +112,11 @@ _UNAVAIL_TITLES = {
 }
 
 MODES = [
-    ("🎵 Audio (MP3)",       "audio_mp3"),
-    ("🎵 Audio (Opus)",      "audio_opus"),
-    ("🎬 Video (MP4)",       "video_mp4"),
-    ("🎬 Video (Best)",      "video_best"),
+    ('🎵 Audio (MP3)',         'audio_mp3'),
+    ('🎵 Audio (Opus)',        'audio_opus'),
+    ('🎬 Video (MP4+M4A)',     'video_mp4_m4a'),
+    ('🎬 Video (MP4)',         'video_mp4'),
+    ('🎬 Video (Best)',        'video_best'),
 ]
 MODES_DICT = dict(MODES)
 
@@ -158,7 +218,7 @@ def _unique_path(filepath: str, known_names: set | None = None) -> str:
     das beim Download-Start einmalig aus dem Zielordner befüllt wird).
     So werden Kollisionen auch dann erkannt, wenn mehrere Dateien in einer
     Session heruntergeladen werden, bevor die erste davon auf der Platte liegt.
-    Beispiel: "Song.mp3" → "Song (1).mp3" → "Song (2).mp3" …
+    Beispiel: 'Song.mp3' → 'Song (1).mp3' → 'Song (2).mp3' …
     """
     base, ext = path.splitext(filepath)
     stem = path.basename(base)
@@ -177,8 +237,8 @@ def _unique_path(filepath: str, known_names: set | None = None) -> str:
 
     i = 1
     while True:
-        candidate = f"{base} ({i}){ext}"
-        cand_stem = f"{stem} ({i})"
+        candidate = f'{base} ({i}){ext}'
+        cand_stem = f'{stem} ({i})'
         if not _is_taken(candidate):
             if known_names is not None:
                 known_names.add(cand_stem)
@@ -257,8 +317,8 @@ def _resolve_outtmpl_unique(url: str, base_opts: dict, known_names: set) -> dict
     info_opts.pop('postprocessor_hooks', None)
     info_opts.pop('progress_hooks', None)
 
-    title      = None
-    ext        = None
+    title       = None
+    ext         = None
     webpage_url = None
     try:
         with yt_dlp.YoutubeDL(info_opts) as ydl:
@@ -291,10 +351,10 @@ def _resolve_outtmpl_unique(url: str, base_opts: dict, known_names: set) -> dict
             has_extract_audio = True
             break
 
-    candidate  = os.path.join(dest_dir, f"{safe_title}.{final_ext}")
+    candidate   = os.path.join(dest_dir, f'{safe_title}.{final_ext}')
     unique_path = _unique_path(candidate, known_names)
 
-    new_opts = dict(base_opts)
+    new_opts  = dict(base_opts)
     stem_path = os.path.splitext(unique_path)[0]
     new_opts['outtmpl'] = stem_path + '.%(ext)s'
 
@@ -337,9 +397,6 @@ def _rename_after_download(final_path_ref: list, known_names: set):
     except OSError:
         pass
     known_names.add(stem)
-
-
-
 
 
 def _embed_thumbnail_as_jpeg(media_fp: str, ffmpeg_exe: str):
@@ -449,6 +506,7 @@ def _embed_thumbnail_as_jpeg(media_fp: str, ffmpeg_exe: str):
                 except OSError:
                     pass
 
+
 def _deduplicate_entries(entries: list) -> list:
     """Entfernt Duplikate aus einer yt-dlp-Eintrags-Liste (Schlüssel: Video-ID)."""
     seen: set = set()
@@ -478,7 +536,7 @@ def _entry_url(e: dict) -> str:
         return url
     vid_id = e.get('id', '')
     if vid_id:
-        return f"https://www.youtube.com/watch?v={vid_id}"
+        return f'https://www.youtube.com/watch?v={vid_id}'
     return url
 
 
@@ -616,6 +674,29 @@ def _attach_scroll(canvas: 'Canvas'):
     canvas.bind('<Leave>', lambda e: canvas.unbind_all('<MouseWheel>'))
 
 
+def _open_folder(folder: str):
+    """
+    Öffnet einen Ordner im nativen Dateimanager – plattformunabhängig.
+      Windows → Explorer
+      macOS   → Finder (open)
+      Linux   → xdg-open, fallback auf gängige Dateimanager
+    """
+    norm = os.path.normpath(folder)
+    if IS_WINDOWS:
+        Popen(f'explorer "{norm}"')
+    elif IS_MAC:
+        Popen(['open', norm])
+    else:
+        for opener in ['xdg-open', 'gvfs-open', 'exo-open',
+                       'nautilus', 'dolphin', 'thunar']:
+            if shutil.which(opener):
+                Popen([opener, norm])
+                return
+        messagebox.showwarning(
+            'Öffnen nicht möglich',
+            'Kein Dateimanager gefunden. Bitte Ordner manuell öffnen.')
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  _BaseSelectionDialog  –  gemeinsame Basis für Playlist- und MultiURL-Dialog
 # ═════════════════════════════════════════════════════════════════════════════
@@ -639,16 +720,16 @@ class _BaseSelectionDialog(Toplevel):
         w, h, min_w, min_h = *geometry, *minsize
         w = min(w, sw - 60)
         h = min(h, sh - 80)
-        self.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
+        self.geometry(f'{w}x{h}+{(sw-w)//2}+{(sh-h)//2}')
         self.minsize(min_w, min_h)
 
         self._vars: list[BooleanVar] = []
-        self._mode_var        = StringVar(value=default_mode)
-        self._bitrate_var     = StringVar(value=default_bitrate)
-        self._use_max_bitrate = BooleanVar(value=use_max_bitrate)
-        self._search_var      = StringVar()      # wird in _build() mit trace versehen
-        self._filter_count_var = StringVar()     # wird in _build() als Label-Quelle gesetzt
-        self._list_canvas     = None   # wird in _build() gesetzt
+        self._mode_var         = StringVar(value=default_mode)
+        self._bitrate_var      = StringVar(value=default_bitrate)
+        self._use_max_bitrate  = BooleanVar(value=use_max_bitrate)
+        self._search_var       = StringVar()      # wird in _build() mit trace versehen
+        self._filter_count_var = StringVar()      # wird in _build() als Label-Quelle gesetzt
+        self._list_canvas      = None             # wird in _build() gesetzt
         self._row_frames: list = []
         self._build()
 
@@ -677,11 +758,11 @@ class _BaseSelectionDialog(Toplevel):
         # ── Suchfilter ────────────────────────────────────────────────────────
         sf = ttk.Frame(self, padding=(8, 4))
         sf.pack(fill='x')
-        ttk.Label(sf, text="🔍 Suche:", font=('Segoe UI', 9)).pack(side='left')
+        ttk.Label(sf, text='🔍 Suche:', font=('Segoe UI', 9)).pack(side='left')
         search_entry = ttk.Entry(sf, textvariable=self._search_var,
                                  font=('Segoe UI', 9), width=40)
         search_entry.pack(side='left', padx=(4, 6), fill='x', expand=True)
-        ttk.Button(sf, text="✕", width=3,
+        ttk.Button(sf, text='✕', width=3,
                    command=lambda: self._search_var.set('')).pack(side='left')
         ttk.Label(sf, textvariable=self._filter_count_var,
                   font=('Segoe UI', 9), foreground='#555').pack(side='left', padx=(8, 0))
@@ -711,31 +792,31 @@ class _BaseSelectionDialog(Toplevel):
         # Download-Einstellungen
         cfg = ttk.LabelFrame(
             self,
-            text="Download-Einstellungen (gilt für alle ausgewählten Einträge)",
+            text='Download-Einstellungen (gilt für alle ausgewählten Einträge)',
             padding=(12, 6))
         cfg.pack(fill='x', padx=8, pady=6)
         mode_row = ttk.Frame(cfg)
         mode_row.pack(fill='x')
-        ttk.Label(mode_row, text="Modus:", width=10).pack(side='left')
+        ttk.Label(mode_row, text='Modus:', width=10).pack(side='left')
         for label, key in MODES:
             ttk.Radiobutton(mode_row, text=label, variable=self._mode_var,
                             value=key,
                             command=self._toggle_bitrate).pack(side='left', padx=6)
         br_row = ttk.Frame(cfg)
         br_row.pack(fill='x', pady=(4, 0))
-        self._br_label = ttk.Label(br_row, text="MP3-Bitrate:", width=10)
+        self._br_label = ttk.Label(br_row, text='MP3-Bitrate:', width=10)
         self._br_label.pack(side='left')
         self._br_combo = ttk.Combobox(
             br_row, textvariable=self._bitrate_var,
-            values=["320", "256", "192", "160", "128", "96", "64"],
+            values=['320', '256', '192', '160', '128', '96', '64'],
             width=7, state='readonly', style='Bitrate.TCombobox')
         self._br_combo.pack(side='left', padx=(0, 2))
-        ttk.Label(br_row, text="kbps",
+        ttk.Label(br_row, text='kbps',
                   font=('Segoe UI', 9), foreground='#666').pack(side='left')
-        ttk.Radiobutton(br_row, text="Feste Bitrate",
+        ttk.Radiobutton(br_row, text='Feste Bitrate',
                         variable=self._use_max_bitrate, value=False,
                         command=self._toggle_bitrate).pack(side='left', padx=(14, 2))
-        ttk.Radiobutton(br_row, text="Max. Bitrate (automatisch je Datei)",
+        ttk.Radiobutton(br_row, text='Max. Bitrate (automatisch je Datei)',
                         variable=self._use_max_bitrate, value=True,
                         command=self._toggle_bitrate).pack(side='left', padx=(2, 0))
         self._toggle_bitrate()
@@ -751,9 +832,9 @@ class _BaseSelectionDialog(Toplevel):
                   font=('Segoe UI', 9), foreground='#555').pack(side='left')
         for v in self._vars:
             v.trace_add('write', lambda *_: self._upd_count())
-        ttk.Button(foot, text="✕ Abbrechen",
+        ttk.Button(foot, text='✕ Abbrechen',
                    command=self._cancel).pack(side='right', padx=(6, 0))
-        ttk.Button(foot, text="📋✔ Auswahl merken",
+        ttk.Button(foot, text='📋✔ Auswahl merken',
                    style='Playlist.TButton', command=self._ok).pack(side='right')
 
     # ── Shared-Logik ──────────────────────────────────────────────────────────
@@ -779,7 +860,7 @@ class _BaseSelectionDialog(Toplevel):
             else:
                 row.pack_forget()
         if term:
-            self._filter_count_var.set(f"{visible}/{total} sichtbar")
+            self._filter_count_var.set(f'{visible}/{total} sichtbar')
         else:
             self._filter_count_var.set('')
         # Scrollregion aktualisieren
@@ -796,13 +877,13 @@ class _BaseSelectionDialog(Toplevel):
             use_max = self._use_max_bitrate.get()
             self._br_combo.configure(state='disabled' if use_max else 'readonly')
             self._br_label.configure(
-                text="MP3-Bitrate:" if mode == 'audio_mp3' else "Opus-Bitrate:")
+                text='MP3-Bitrate:' if mode == 'audio_mp3' else 'Opus-Bitrate:')
         else:
             self._br_combo.configure(state='disabled')
 
     def _upd_count(self):
         n = sum(v.get() for v in self._vars)
-        self._count_var.set(f"{n} von {len(self._vars)} ausgewählt")
+        self._count_var.set(f'{n} von {len(self._vars)} ausgewählt')
 
     def _all(self):    [v.set(True)  for v in self._vars]
     def _none(self):   [v.set(False) for v in self._vars]
@@ -832,13 +913,13 @@ class PlaylistDialog(_BaseSelectionDialog):
 
     # Hintergrundfarben
     _BG_NORMAL     = ''          # leer = Theme-Standard
-    _BG_DOWNLOADED = 'white'     #'#c8f0c8'   # hellgrün
+    _BG_DOWNLOADED = 'white'     # bereits heruntergeladen
     _BG_UNAVAIL    = ''          # bleibt Standard, Schrift rot
 
     def __init__(self, parent, entries: list,
-                 default_mode: str = "audio_mp3",
-                 default_bitrate: str = "320",
-                 title_prefix: str = "Playlist",
+                 default_mode: str = 'audio_mp3',
+                 default_bitrate: str = '320',
+                 title_prefix: str = 'Playlist',
                  checked_indices: set | None = None,
                  downloaded_stems: set | None = None):
         self._entries          = entries
@@ -850,7 +931,7 @@ class PlaylistDialog(_BaseSelectionDialog):
             parent,
             default_mode=default_mode,
             default_bitrate=default_bitrate,
-            title=f"{title_prefix} – Auswahl & Download-Einstellungen",
+            title=f'{title_prefix} – Auswahl & Download-Einstellungen',
             geometry=(980, 720),
             minsize=(700, 380),
             use_max_bitrate=True,
@@ -864,7 +945,7 @@ class PlaylistDialog(_BaseSelectionDialog):
         )
 
         # Basis-Text
-        base_text = f"📋  {len(self._entries)} Einträge"
+        base_text = f'📋  {len(self._entries)} Einträge'
         ttk.Label(
             head,
             text=base_text,
@@ -874,8 +955,8 @@ class PlaylistDialog(_BaseSelectionDialog):
         if n_done:
             ttk.Label(
                 head,
-                text=f"  •  ✅ {n_done} bereits vorhanden",
-                foreground="blue",
+                text=f'  •  ✅ {n_done} bereits vorhanden',
+                foreground='blue',
                 font=('Segoe UI', 11, 'bold')
             ).pack(side='left')
 
@@ -884,10 +965,10 @@ class PlaylistDialog(_BaseSelectionDialog):
         sel_frame.pack(side='right')
 
         for lbl2, cmd, w in [
-            ("Alle",                self._all,                  8),
-            ("Keine",               self._none,                 8),
-            ("Umkehren",            self._invert,               9),
-            ("✅ Nur Downloadbare", self._select_downloadable, 18),
+            ('Alle',                self._all,                  8),
+            ('Keine',               self._none,                 8),
+            ('Umkehren',            self._invert,               9),
+            ('✅ Nur Downloadbare', self._select_downloadable, 18),
         ]:
             ttk.Button(
                 sel_frame,
@@ -944,20 +1025,20 @@ class PlaylistDialog(_BaseSelectionDialog):
             cb = ttk.Checkbutton(row, variable=var)
             cb.pack(side='left')
 
-            Label(row, text=f"{i+1:>3}.",
+            Label(row, text=f'{i+1:>3}.',
                   width=4, font=('Segoe UI', 9),
                   foreground='#888', background=bg,
                   anchor='e').pack(side='left')
 
             dur   = entry.get('duration') or 0
-            dur_s = f"  [{int(dur//60)}:{int(dur%60):02d}]" if dur else ""
+            dur_s = f'  [{int(dur//60)}:{int(dur%60):02d}]' if dur else ''
 
             if is_bad:
-                text_color = 'red' # '#CC0000'
+                text_color = 'red'
                 icon   = ''
                 suffix = '  ⚠ nicht verfügbar'
             elif is_done:
-                text_color = 'blue' # '#1a6b1a'
+                text_color = 'blue'
                 # Beide, nur Audio, nur Video
                 if 'audio' in is_done and 'video' in is_done:
                     icon = '  🎵🎬'
@@ -973,7 +1054,7 @@ class PlaylistDialog(_BaseSelectionDialog):
 
             Label(
                 row,
-                text=f"{title}{dur_s}{icon}{suffix}",
+                text=f'{title}{dur_s}{icon}{suffix}',
                 font=('Segoe UI', 9), anchor='w',
                 foreground=text_color, background=bg,
             ).pack(side='left', fill='x', expand=True, padx=(4, 0))
@@ -999,8 +1080,8 @@ class PlaylistDialog(_BaseSelectionDialog):
         sel = [i for i, v in enumerate(self._vars) if v.get()]
         self.last_checked = set(sel)
         if not sel:
-            messagebox.showwarning("Hinweis",
-                "Bitte mindestens einen Eintrag auswählen.", parent=self)
+            messagebox.showwarning('Hinweis',
+                'Bitte mindestens einen Eintrag auswählen.', parent=self)
             return
         bitrate = '0' if self._use_max_bitrate.get() else self._bitrate_var.get()
         self.result = {'indices': sel, 'mode': self._mode_var.get(),
@@ -1018,26 +1099,26 @@ class MultiURLDialog(_BaseSelectionDialog):
     """
 
     def __init__(self, parent, urls: list,
-                 default_mode: str = "audio_mp3",
-                 default_bitrate: str = "320"):
+                 default_mode: str = 'audio_mp3',
+                 default_bitrate: str = '320'):
         self._urls = urls
         super().__init__(
             parent,
             default_mode=default_mode,
             default_bitrate=default_bitrate,
-            title="Multi-URL – Auswahl & Download-Einstellungen",
+            title='Multi-URL – Auswahl & Download-Einstellungen',
             geometry=(860, 640),
             minsize=(560, 360),
             use_max_bitrate=False,
         )
 
     def _build_header(self, head: ttk.Frame):
-        ttk.Label(head, text=f"🔗  {len(self._urls)} URLs erkannt",
+        ttk.Label(head, text=f'🔗  {len(self._urls)} URLs erkannt',
                   font=('Segoe UI', 11, 'bold')).pack(side='left')
         sel_frame = ttk.Frame(head)
         sel_frame.pack(side='right')
-        for lbl, cmd in [("Alle", self._all), ("Keine", self._none),
-                         ("Umkehren", self._invert)]:
+        for lbl, cmd in [('Alle', self._all), ('Keine', self._none),
+                         ('Umkehren', self._invert)]:
             ttk.Button(sel_frame, text=lbl, width=8,
                        command=cmd).pack(side='left', padx=2)
 
@@ -1048,7 +1129,7 @@ class MultiURLDialog(_BaseSelectionDialog):
             row = ttk.Frame(inner)
             row.pack(fill='x', padx=4, pady=1)
             ttk.Checkbutton(row, variable=var).pack(side='left')
-            ttk.Label(row, text=f"{i+1:>3}.", width=4,
+            ttk.Label(row, text=f'{i+1:>3}.', width=4,
                       font=('Segoe UI', 9), foreground='#888').pack(side='left')
             ttk.Label(row, text=url, font=('Segoe UI', 9), anchor='w',
                       foreground='#1565C0').pack(
@@ -1057,8 +1138,8 @@ class MultiURLDialog(_BaseSelectionDialog):
     def _ok(self):
         sel = [self._urls[i] for i, v in enumerate(self._vars) if v.get()]
         if not sel:
-            messagebox.showwarning("Hinweis",
-                "Bitte mindestens eine URL auswählen.", parent=self)
+            messagebox.showwarning('Hinweis',
+                'Bitte mindestens eine URL auswählen.', parent=self)
             return
         self.result = {'urls': sel, 'mode': self._mode_var.get(),
                        'bitrate': self._bitrate_var.get()}
@@ -1075,13 +1156,13 @@ class MultiURLDialog(_BaseSelectionDialog):
 class YouTubeDownloaderApp:
     def __init__(self, root):
         self.root = root
-        self.root.title(f"YouTube Downloader v{__version__}  🎵 + 🎬")
-        self.ui_WEITE = 600
-        self.root.geometry(f"{self.ui_WEITE}x600")
-        self.root.minsize(600, 600)
+        self.root.title(f'YouTube Downloader v{__version__}  🎵 + 🎬')
+        self.ui_WEITE = 750
+        self.root.geometry(f'{self.ui_WEITE}x600')
+        self.root.minsize(self.ui_WEITE, 600)
 
         try:
-            self.root.iconbitmap("yt_symbol_small.ico")
+            self.root.iconbitmap('yt_symbol_small.ico')
         except Exception:
             pass
 
@@ -1089,15 +1170,15 @@ class YouTubeDownloaderApp:
         self.audio_path_var    = StringVar()
         self.video_path_var    = StringVar()
         self.audio_to_mp3_var  = BooleanVar(value=True)
-        self.audio_format_var  = StringVar(value="original")   # "original" | "opus" | "mp3"
+        self.audio_format_var  = StringVar(value='original')   # 'original' | 'opus' | 'mp3'
         self.video_to_mp4_var  = BooleanVar(value=True)
-        self.video_format_var  = StringVar(value="original")   # "original" | "mp4" | "mkv"
-        self.mp3_bitrate_var   = StringVar(value="320")
-        self.quick_bitrate_var = StringVar(value="320")
+        self.video_format_var  = StringVar(value='original')   # 'original' | 'mp4' | 'mkv'
+        self.mp3_bitrate_var   = StringVar(value='320')
+        self.quick_bitrate_var = StringVar(value='320')
         self.open_folder_var      = BooleanVar(value=False)
         self.write_tags_var       = BooleanVar(value=True)
         self.write_thumbnail_var  = BooleanVar(value=True)
-        self.cookies_browser_var  = StringVar(value="")   # leer = keine Cookies
+        self.cookies_browser_var  = StringVar(value='')   # leer = keine Cookies
 
         self.clicked_stream_video = StringVar()
         self.clicked_stream_audio = StringVar()
@@ -1121,8 +1202,8 @@ class YouTubeDownloaderApp:
         self._download_active: bool = False
 
         parent_dir = path.dirname(path.abspath(__file__))
-        self.audio_path_var.set(path.join(parent_dir, "Downloads", "audio"))
-        self.video_path_var.set(path.join(parent_dir, "Downloads", "video"))
+        self.audio_path_var.set(path.join(parent_dir, 'Downloads', 'audio'))
+        self.video_path_var.set(path.join(parent_dir, 'Downloads', 'video'))
 
         # ── Konfiguration laden ───────────────────────────────────────────────
         self._cfg = _config_load()
@@ -1177,15 +1258,15 @@ class YouTubeDownloaderApp:
             usable_h = int(screen_h * 0.93)
             new_h    = min(content_h + 4, usable_h)
             cur_w    = self.root.winfo_width() or self.ui_WEITE
-            self.root.geometry(f"{cur_w}x{new_h}")
+            self.root.geometry(f'{cur_w}x{new_h}')
             self._initial_size_set = True
 
     # ─────────────────────────────────────────────────────────────────────────
     def _apply_config(self, cfg: dict):
         """Überträgt geladene Konfigurationswerte auf die Tkinter-Variablen."""
         parent_dir = path.dirname(path.abspath(__file__))
-        default_audio = path.join(parent_dir, "Downloads", "audio")
-        default_video = path.join(parent_dir, "Downloads", "video")
+        default_audio = path.join(parent_dir, 'Downloads', 'audio')
+        default_video = path.join(parent_dir, 'Downloads', 'video')
 
         self.audio_path_var.set(cfg.get('audio_path') or default_audio)
         self.video_path_var.set(cfg.get('video_path') or default_video)
@@ -1228,13 +1309,13 @@ class YouTubeDownloaderApp:
         s = ttk.Style()
         s.theme_use('clam')
         s.configure('Primary.TButton',
-                    padding=8, font=('Segoe UI', 10, 'bold'), background="#2196F3")  # blau:2196F3
+                    padding=8, font=('Segoe UI', 10, 'bold'), background='#2196F3')  # blau
         s.configure('Action.TButton',
-                    padding=8, font=('Segoe UI', 10, 'bold'), background="#4CAF50")  # gruen:4CAF50
+                    padding=8, font=('Segoe UI', 10, 'bold'), background='#4CAF50')  # grün
         s.configure('Secondary.TButton', padding=8, font=('Segoe UI', 9))
-        s.configure('Playlist.TButton',  padding=8, font=('Segoe UI', 10, 'bold'), background="#2196F3")
+        s.configure('Playlist.TButton',  padding=8, font=('Segoe UI', 10, 'bold'), background='#2196F3')
         s.configure('Title.TLabel',
-                    font=('Segoe UI', 16, 'bold'), foreground="#FF0000")
+                    font=('Segoe UI', 16, 'bold'), foreground='#FF0000')
         s.configure('Subtitle.TLabel', font=('Segoe UI', 11, 'bold'))
         s.configure('Info.TLabel',    font=('Segoe UI', 9), foreground='#666666')
         s.configure('PlStatus.TLabel', font=('Segoe UI', 9, 'italic'),
@@ -1248,20 +1329,16 @@ class YouTubeDownloaderApp:
 
     # ─────────────────────────────────────────────────────────────────────────
     def create_widgets(self):
-        mf = ttk.Frame(self._inner, padding="4")
+        mf = ttk.Frame(self._inner, padding='4')
         mf.grid(row=0, column=0, sticky='nsew')
         self._inner.columnconfigure(0, weight=1)
         mf.columnconfigure(0, weight=1)
         self._mf = mf
         r = 0
 
-        # ── Titel ────────────────────────────────────────────────────────────
-        #ttk.Label(mf, text="🎬 YouTube Downloader", style='Title.TLabel').grid(row=r, column=0, pady=(0, 4), sticky='n')
-        #r += 1
-
         # ── URL-Eingabe ──────────────────────────────────────────────────────
         uf = ttk.LabelFrame(mf,
-            text="URL(s)  –  ein Link pro Zeile  oder  Playlist-URL", padding="10")
+            text='URL(s)  –  ein Link pro Zeile  oder  Playlist-URL', padding='10')
         uf.grid(row=r, column=0, sticky='ew', pady=(0, 10))
         uf.columnconfigure(0, weight=1)
         r += 1
@@ -1288,20 +1365,20 @@ class YouTubeDownloaderApp:
 
         btns = ttk.Frame(uf)
         btns.grid(row=0, column=1, padx=(8, 0), sticky='n')
-        ttk.Button(btns, text="📋 Einfügen",
+        ttk.Button(btns, text='📋 Einfügen',
                    command=self.paste_link).pack(fill='x', pady=2)
-        ttk.Button(btns, text="🔍 Analysieren",
+        ttk.Button(btns, text='🔍 Analysieren',
                    command=self.analyze_url,
                    style='Primary.TButton').pack(fill='x', pady=2)
-        ttk.Button(btns, text="🗑 Löschen",
+        ttk.Button(btns, text='🗑 Löschen',
                    command=self.clear_link).pack(fill='x', pady=2)
 
         ttk.Label(uf,
-                  text="Playlist → Playlist-Sektion nutzen  |  Mehrere URLs → Multi-URL-Dialog erscheint automatisch",
+                  text='Playlist → Playlist-Sektion nutzen  |  Mehrere URLs → Multi-URL-Dialog erscheint automatisch',
                   style='Info.TLabel', wraplength=580).grid(row=2, column=0, columnspan=2,
                                             pady=(5, 0), sticky='w')
 
-        self.title_label = ttk.Label(mf, text="",
+        self.title_label = ttk.Label(mf, text='',
                                      font=('Segoe UI', 13, 'italic'),
                                      foreground='red', wraplength=710)
         self.title_label.grid(row=r, column=0, pady=(0, 6), sticky='w')
@@ -1313,8 +1390,8 @@ class YouTubeDownloaderApp:
         sf.columnconfigure(1, weight=1)
         r += 1
 
-        self.status_var = StringVar(value="Bereit")
-        ttk.Label(sf, text="Status:").grid(row=0, column=0, sticky='w')
+        self.status_var = StringVar(value='Bereit')
+        ttk.Label(sf, text='Status:').grid(row=0, column=0, sticky='w')
         ttk.Label(sf, textvariable=self.status_var,
                   relief=SUNKEN, padding=5).grid(
             row=0, column=1, sticky='ew', padx=(8, 0))
@@ -1327,13 +1404,13 @@ class YouTubeDownloaderApp:
         self.progress = ttk.Progressbar(pgf, mode='determinate',
                                         variable=self._progress_pct, maximum=100)
         self.progress.grid(row=0, column=0, sticky='ew')
-        self._pct_label = ttk.Label(pgf, text="", style='Info.TLabel',
+        self._pct_label = ttk.Label(pgf, text='', style='Info.TLabel',
                                     width=7, anchor='e')
         self._pct_label.grid(row=0, column=1, padx=(6, 0))
-        self._pause_btn  = ttk.Button(pgf, text="⏸ Pause", width=10,
+        self._pause_btn  = ttk.Button(pgf, text='⏸ Pause', width=10,
                                       command=self._toggle_pause, state='disabled')
         self._pause_btn.grid(row=0, column=2, padx=(6, 0))
-        self._cancel_btn = ttk.Button(pgf, text="✕ Abbrechen", width=12,
+        self._cancel_btn = ttk.Button(pgf, text='✕ Abbrechen', width=12,
                                       command=self._request_cancel, state='disabled')
         self._cancel_btn.grid(row=0, column=3, padx=(4, 0))
 
@@ -1344,40 +1421,42 @@ class YouTubeDownloaderApp:
         r += 1
 
         self._qd_toggle_lbl = StringVar(
-            value="▶  ⚡ Schnell-Download  –  zum Aufklappen klicken")
+            value='▶  ⚡ Schnell-Download  –  zum Aufklappen klicken')
         lbl_qd = ttk.Label(qd_header, textvariable=self._qd_toggle_lbl,
                   font=('Segoe UI', 10, 'bold'), foreground='#1565C0', cursor='hand2')
         lbl_qd.grid(row=0, column=0, sticky='w')
         qd_header.bind('<Button-1>', lambda e: self._toggle_quickdownload())
         lbl_qd.bind('<Button-1>', lambda e: self._toggle_quickdownload())
 
-        self._qd_frame = ttk.LabelFrame(mf, text="", padding="10")
+        self._qd_frame = ttk.LabelFrame(mf, text='', padding='10')
         self._qd_frame.columnconfigure(0, weight=1)
         self._sec_qd = {
             'expanded': False, 'frame': self._qd_frame,
             'grid_row': r, 'lbl_var': self._qd_toggle_lbl,
-            'icon_text': "⚡ Schnell-Download", 'pady': (0, 8),
+            'icon_text': '⚡ Schnell-Download', 'pady': (0, 8),
         }
         r += 1
 
         btn_row = ttk.Frame(self._qd_frame)
         btn_row.grid(row=0, column=0, sticky='n')
         for txt, cmd in [
-            ("🎵 Audio (MP3)",  self.quick_audio_mp3),
-            ("🎵 Audio (Opus)", self.quick_audio_opus),
-            ("🎬 Video (MP4)",  self.quick_video_mp4),
-            ("🎬 Video (Best)", self.quick_video_best),
+            ('🎵 Audio\nMP3',    self.quick_audio_mp3),
+            ('🎵 Audio\nOpus',   self.quick_audio_opus),
+            ('🎬 Video\nMP4+M4A', self.quick_video_mp4_m4a),
+            ('🎬 Video\nMP4',    self.quick_video_mp4),
+            ('🎬 Video\nBest',   self.quick_video_best),
         ]:
             ttk.Button(btn_row, text=txt, style='Action.TButton',
                        command=cmd, width=16).pack(side='left', padx=4)
 
         ttk.Label(self._qd_frame,
-                  text="MP3/Opus: Maximale verfügbare Bitrate der Quelle wird automatisch genutzt.",
+                  text='MP3/Opus: Maximale verfügbare Bitrate der Quelle wird automatisch genutzt.  '
+                       'MP4+M4A: Original-Streams vom Server (kein Re-Encoding, AV1-freie Kompatibilität).',
                   style='Info.TLabel', wraplength=680).grid(row=1, column=0, sticky='ew', pady=(6, 2))
         ttk.Label(self._qd_frame,
-                  text="Bei 1 URL oder mit playlist-INDEX: direkt herunterladen.\n"
-                       "Bei Playlist-URL (ohne INDEX): alle downloadbaren Einträge direkt, kein Dialog.\n"
-                       "Gelöschte/private Videos werden automatisch übersprungen.",
+                  text='Bei 1 URL oder mit playlist-INDEX: direkt herunterladen.\n'
+                       'Bei Playlist-URL (ohne INDEX): alle downloadbaren Einträge direkt, kein Dialog.\n'
+                       'Gelöschte/private Videos werden automatisch übersprungen.',
                   style='Info.TLabel', wraplength=680).grid(row=2, column=0, pady=(4, 0), sticky='ew')
 
         # ── Playlist-Sektion ──────────────────────────────────────────────────
@@ -1387,38 +1466,38 @@ class YouTubeDownloaderApp:
         r += 1
 
         self._pl_toggle_lbl = StringVar(
-            value="▶  📋 Playlist-Verwaltung  –  zum Aufklappen klicken")
+            value='▶  📋 Playlist-Verwaltung  –  zum Aufklappen klicken')
         lbl_pl = ttk.Label(pl_header, textvariable=self._pl_toggle_lbl,
                   font=('Segoe UI', 10, 'bold'), foreground='#1565C0', cursor='hand2')
         lbl_pl.grid(row=0, column=0, sticky='w')
         pl_header.bind('<Button-1>', lambda e: self._toggle_playlist())
         lbl_pl.bind('<Button-1>', lambda e: self._toggle_playlist())
 
-        self._pl_frame = ttk.LabelFrame(mf, text="", padding="10")
+        self._pl_frame = ttk.LabelFrame(mf, text='', padding='10')
         self._pl_frame.columnconfigure(0, weight=1)
         self._sec_pl = {
             'expanded': False, 'frame': self._pl_frame,
             'grid_row': r, 'lbl_var': self._pl_toggle_lbl,
-            'icon_text': "📋 Playlist-Verwaltung", 'pady': (0, 8),
+            'icon_text': '📋 Playlist-Verwaltung', 'pady': (0, 8),
         }
         r += 1
 
         pl_btn_row = ttk.Frame(self._pl_frame)
         pl_btn_row.grid(row=0, column=0, sticky='n')
-        ttk.Button(pl_btn_row, text="📋 Playlist bearbeiten",
+        ttk.Button(pl_btn_row, text='📋 Playlist bearbeiten',
                    command=self.open_playlist_editor,
                    style='Playlist.TButton', width=22).pack(side='left', padx=4)
-        ttk.Button(pl_btn_row, text="▶ Playlist herunterladen 📥",
+        ttk.Button(pl_btn_row, text='▶ Playlist herunterladen 📥',
                    command=self.download_pending_playlist,
                    style='Action.TButton', width=22).pack(side='left', padx=4)
 
-        self._pl_status_var = StringVar(value="Keine Playlist geladen.")
+        self._pl_status_var = StringVar(value='Keine Playlist geladen.')
         ttk.Label(self._pl_frame, textvariable=self._pl_status_var,
                   style='PlStatus.TLabel', wraplength=680).grid(
                       row=1, column=0, sticky='w', pady=(6, 0))
         ttk.Label(self._pl_frame,
                   text="Tipp: Nach der Analyse direkt 'Bearbeiten' klicken – "
-                       "Playlist ist bereits geladen. Auswahl bleibt bis zum Download erhalten.",
+                       'Playlist ist bereits geladen. Auswahl bleibt bis zum Download erhalten.',
                   style='Info.TLabel', wraplength=680).grid(
                       row=2, column=0, sticky='w', pady=(2, 0))
 
@@ -1429,25 +1508,25 @@ class YouTubeDownloaderApp:
         r += 1
 
         self._adv_toggle_lbl = StringVar(
-            value="▶  🛠 Erweiterte Optionen (Einzelvideo)  –  zum Aufklappen klicken")
+            value='▶  🛠 Erweiterte Optionen (Einzelvideo)  –  zum Aufklappen klicken')
         lbl_adv = ttk.Label(adv_header, textvariable=self._adv_toggle_lbl,
                   font=('Segoe UI', 10, 'bold'), foreground='#1565C0', cursor='hand2')
         lbl_adv.grid(row=0, column=0, sticky='w')
         adv_header.bind('<Button-1>', lambda e: self._toggle_advanced())
         lbl_adv.bind('<Button-1>', lambda e: self._toggle_advanced())
 
-        self._adv_frame = ttk.LabelFrame(mf, text="", padding="10")
+        self._adv_frame = ttk.LabelFrame(mf, text='', padding='10')
         self._adv_frame.columnconfigure(0, weight=3)
         self._adv_frame.columnconfigure(1, weight=1)
         self._sec_adv = {
             'expanded': False, 'frame': self._adv_frame,
             'grid_row': r, 'lbl_var': self._adv_toggle_lbl,
-            'icon_text': "🛠 Erweiterte Optionen (Einzelvideo)", 'pady': (0, 10),
+            'icon_text': '🛠 Erweiterte Optionen (Einzelvideo)', 'pady': (0, 10),
         }
         r += 1
 
         # ── Bereich: Video Stream ─────────────────────────────────────────────
-        video_lf = ttk.LabelFrame(self._adv_frame, text="Video Stream", padding=(8, 4))
+        video_lf = ttk.LabelFrame(self._adv_frame, text='Video Stream', padding=(8, 4))
         video_lf.grid(row=0, column=0, columnspan=2, sticky='ew', pady=(0, 6))
         video_lf.columnconfigure(0, weight=1)
 
@@ -1464,20 +1543,18 @@ class YouTubeDownloaderApp:
 
         video_opts = ttk.Frame(video_lf)
         video_opts.grid(row=1, column=0, sticky='w', pady=(4, 0))
-        ttk.Label(video_opts, text="Video-Format:", style='Info.TLabel').pack(side='left', padx=(0, 6))
-        for lbl, val in [("Original", "original"), ("MP4", "mp4"), ("MKV", "mkv")]:
+        ttk.Label(video_opts, text='Video-Format:', style='Info.TLabel').pack(side='left', padx=(0, 6))
+        for lbl, val in [('Original', 'original'), ('MP4', 'mp4'), ('MKV', 'mkv')]:
             ttk.Radiobutton(video_opts, text=lbl, variable=self.video_format_var,
                             value=val).pack(side='left', padx=(0, 4))
-        #ttk.Checkbutton(video_opts, text="Video ignorieren",
-        #                variable=self.ignore_video_var).pack(side='left', padx=(16, 0))
         ttk.Separator(video_lf, orient='horizontal').grid(row=2, column=0, sticky='ew', pady=(6, 4))
         ignore_video_row = ttk.Frame(video_lf)
         ignore_video_row.grid(row=3, column=0, sticky='w')
-        ttk.Checkbutton(ignore_video_row, text="Video ignorieren",
+        ttk.Checkbutton(ignore_video_row, text='Video ignorieren',
                         variable=self.ignore_video_var).pack(side='left')
 
         # ── Bereich: Audio Stream ─────────────────────────────────────────────
-        audio_lf = ttk.LabelFrame(self._adv_frame, text="Audio Stream", padding=(8, 4))
+        audio_lf = ttk.LabelFrame(self._adv_frame, text='Audio Stream', padding=(8, 4))
         audio_lf.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(0, 6))
         audio_lf.columnconfigure(0, weight=1)
 
@@ -1491,29 +1568,29 @@ class YouTubeDownloaderApp:
         audio_opts = ttk.Frame(audio_lf)
         audio_opts.grid(row=1, column=0, sticky='w')
 
-        ttk.Label(audio_opts, text="Audio-Format:", style='Info.TLabel').pack(side='left', padx=(0, 6))
-        for lbl, val in [("Original", "original"), ("Opus", "opus"), ("MP3", "mp3")]:
+        ttk.Label(audio_opts, text='Audio-Format:', style='Info.TLabel').pack(side='left', padx=(0, 6))
+        for lbl, val in [('Original', 'original'), ('Opus', 'opus'), ('MP3', 'mp3')]:
             ttk.Radiobutton(audio_opts, text=lbl, variable=self.audio_format_var,
                             value=val, command=self._toggle_bitrate_state).pack(side='left', padx=(0, 4))
 
         # Bitrate-Frame – nur sichtbar wenn MP3 aktiv, erscheint inline rechts
         self._bitrate_frame = ttk.Frame(audio_opts)
         brow = self._bitrate_frame
-        ttk.Label(brow, text="  Bitrate:", style='Info.TLabel').pack(side='left')
+        ttk.Label(brow, text='  Bitrate:', style='Info.TLabel').pack(side='left')
         self.bitrate_combo = ttk.Combobox(
             brow, textvariable=self.mp3_bitrate_var,
-            values=["320", "256", "192", "160", "128", "96", "64"],
+            values=['320', '256', '192', '160', '128', '96', '64'],
             width=6, state='readonly', style='Bitrate.TCombobox')
         self.bitrate_combo.pack(side='left', padx=(4, 0))
-        ttk.Label(brow, text="kbps", style='Info.TLabel').pack(side='left', padx=(2, 0))
+        ttk.Label(brow, text='kbps', style='Info.TLabel').pack(side='left', padx=(2, 0))
 
         ttk.Separator(audio_lf, orient='horizontal').grid(row=2, column=0, sticky='ew', pady=(6, 4))
         ignore_audio_row = ttk.Frame(audio_lf)
         ignore_audio_row.grid(row=3, column=0, sticky='w')
-        ttk.Checkbutton(ignore_audio_row, text="Audio ignorieren",
+        ttk.Checkbutton(ignore_audio_row, text='Audio ignorieren',
                         variable=self.ignore_audio_var).pack(side='left')
 
-        ttk.Button(self._adv_frame, text="▶ Mit Auswahl herunterladen 📥",
+        ttk.Button(self._adv_frame, text='▶ Mit Auswahl herunterladen 📥',
                    command=self.download_custom,
                    style='Action.TButton').grid(
             row=2, column=0, columnspan=2, pady=(4, 0))
@@ -1525,19 +1602,19 @@ class YouTubeDownloaderApp:
         r += 1
 
         self._so_toggle_lbl = StringVar(
-            value="▶  💾 Speicherorte & Optionen  –  zum Aufklappen klicken")
+            value='▶  💾 Speicherorte & Optionen  –  zum Aufklappen klicken')
         lbl_so = ttk.Label(so_header, textvariable=self._so_toggle_lbl,
                   font=('Segoe UI', 10, 'bold'), foreground='#1565C0', cursor='hand2')
         lbl_so.grid(row=0, column=0, sticky='w')
         so_header.bind('<Button-1>', lambda e: self._toggle_saveopts())
         lbl_so.bind('<Button-1>', lambda e: self._toggle_saveopts())
 
-        self._so_frame = ttk.LabelFrame(mf, text="", padding="10")
+        self._so_frame = ttk.LabelFrame(mf, text='', padding='10')
         self._so_frame.columnconfigure(1, weight=1)
         self._sec_so = {
             'expanded': False, 'frame': self._so_frame,
             'grid_row': r, 'lbl_var': self._so_toggle_lbl,
-            'icon_text': "💾 Speicherorte & Optionen", 'pady': (0, 10),
+            'icon_text': '💾 Speicherorte & Optionen', 'pady': (0, 10),
         }
         r += 1
 
@@ -1548,36 +1625,36 @@ class YouTubeDownloaderApp:
                       width=50).grid(row=grid_row, column=1, padx=(8, 4), sticky='ew')
             btn_frame = ttk.Frame(self._so_frame)
             btn_frame.grid(row=grid_row, column=2, sticky='w')
-            ttk.Button(btn_frame, text="📁 Durchsuchen",
+            ttk.Button(btn_frame, text='📁 Durchsuchen',
                        command=lambda k=kind: self.browse_folder(k),
                        style='Secondary.TButton').pack(side='left')
-            ttk.Button(btn_frame, text="🗂 Öffnen",
+            ttk.Button(btn_frame, text='🗂 Öffnen',
                        command=lambda v=path_var: self._open_folder_direct(v.get()),
                        style='Secondary.TButton').pack(side='left', padx=(4, 0))
 
-        _path_row(0, "Audio:", self.audio_path_var, 'audio')
-        _path_row(1, "Video:", self.video_path_var, 'video')
+        _path_row(0, 'Audio:', self.audio_path_var, 'audio')
+        _path_row(1, 'Video:', self.video_path_var, 'video')
 
         opt_row = ttk.Frame(self._so_frame)
         opt_row.grid(row=2, column=0, columnspan=3, sticky='w', pady=(8, 2))
-        ttk.Checkbutton(opt_row, text="📂 Zielordner nach Download öffnen",
+        ttk.Checkbutton(opt_row, text='📂 Zielordner nach Download öffnen',
                         variable=self.open_folder_var).pack(side='left', padx=(0, 20))
-        ttk.Checkbutton(opt_row, text="🏷 Metadaten-Tags in Datei schreiben",
+        ttk.Checkbutton(opt_row, text='🏷 Metadaten-Tags in Datei schreiben',
                         variable=self.write_tags_var).pack(side='left', padx=(0, 20))
-        ttk.Checkbutton(opt_row, text="🖼 Thumbnail einbetten",
+        ttk.Checkbutton(opt_row, text='🖼 Thumbnail einbetten',
                         variable=self.write_thumbnail_var).pack(side='left')
 
         # ── Cookies-Zeile ─────────────────────────────────────────────────────
         ck_row = ttk.Frame(self._so_frame)
         ck_row.grid(row=4, column=0, columnspan=3, sticky='w', pady=(6, 2))
-        ttk.Label(ck_row, text="🍪 Cookies aus Browser:",
+        ttk.Label(ck_row, text='🍪 Cookies aus Browser:',
                   style='Info.TLabel').pack(side='left', padx=(0, 6))
-        _BROWSERS = ["", "chrome", "firefox", "edge", "brave", "opera", "safari"]
+        _BROWSERS = ['', 'chrome', 'firefox', 'edge', 'brave', 'opera', 'safari']
         ck_combo = ttk.Combobox(ck_row, textvariable=self.cookies_browser_var,
                                 values=_BROWSERS, width=10, state='readonly')
         ck_combo.pack(side='left')
         ttk.Label(ck_row,
-                  text="  ← Browser wählen um YouTube-Anmeldung zu nutzen (löst 429-Fehler)",
+                  text='  ← Browser wählen um YouTube-Anmeldung zu nutzen (löst 429-Fehler)',
                   style='Info.TLabel').pack(side='left')
 
         self.root.after(0, lambda: self._toggle_quickdownload(force_open=True))
@@ -1598,7 +1675,7 @@ class YouTubeDownloaderApp:
     # ═════════════════════════════════════════════════════════════════════════
 
     def _get_urls(self) -> list:
-        raw = self.url_text.get("1.0", END)
+        raw = self.url_text.get('1.0', END)
         return [l.strip() for l in raw.splitlines()
                 if l.strip().startswith('http')]
 
@@ -1606,13 +1683,13 @@ class YouTubeDownloaderApp:
         self.status_var.set(msg)
         if show_progress:
             self._progress_pct.set(0.0)
-            self._pct_label.config(text="")
+            self._pct_label.config(text='')
         self.root.update_idletasks()
 
     def _reset_progress(self):
         self.root.after(0, lambda: (
             self._progress_pct.set(0.0),
-            self._pct_label.config(text="")))
+            self._pct_label.config(text='')))
 
     def _toggle_bitrate_state(self):
         if self.audio_format_var.get() == 'mp3':
@@ -1624,7 +1701,7 @@ class YouTubeDownloaderApp:
         state = 'normal' if active else 'disabled'
         self._download_active = active
         self.root.after(0, lambda: (
-            self._pause_btn.config(state=state, text="⏸ Pause"),
+            self._pause_btn.config(state=state, text='⏸ Pause'),
             self._cancel_btn.config(state=state)))
         if not active:
             self._pause_event.set()
@@ -1635,12 +1712,12 @@ class YouTubeDownloaderApp:
             return
         if self._pause_event.is_set():
             self._pause_event.clear()
-            self._pause_btn.config(text="▶ Weiter")
-            self.status_var.set("⏸ Pausiert – ▶ Weiter zum Fortfahren")
+            self._pause_btn.config(text='▶ Weiter')
+            self.status_var.set('⏸ Pausiert – ▶ Weiter zum Fortfahren')
         else:
             self._pause_event.set()
-            self._pause_btn.config(text="⏸ Pause")
-            self.status_var.set("▶ Download wird fortgesetzt...")
+            self._pause_btn.config(text='⏸ Pause')
+            self.status_var.set('▶ Download wird fortgesetzt...')
 
     def _request_cancel(self):
         if not self._download_active:
@@ -1648,7 +1725,7 @@ class YouTubeDownloaderApp:
         self._cancel_flag = True
         self._pause_event.set()
         self._cancel_btn.config(state='disabled')
-        self.status_var.set("✕ Wird abgebrochen...")
+        self.status_var.set('✕ Wird abgebrochen...')
 
     def _check_pause_cancel(self) -> bool:
         self._pause_event.wait()
@@ -1665,8 +1742,8 @@ class YouTubeDownloaderApp:
         if force_open and sec['expanded']:
             return
         sec['expanded'] = force_open or (not sec['expanded'])
-        arrow = "▼" if sec['expanded'] else "▶"
-        action = "zum Einklappen" if sec['expanded'] else "zum Aufklappen"
+        arrow  = '▼' if sec['expanded'] else '▶'
+        action = 'zum Einklappen' if sec['expanded'] else 'zum Aufklappen'
         sec['lbl_var'].set(f"{arrow}  {sec['icon_text']}  –  {action} klicken")
         if sec['expanded']:
             sec['frame'].grid(row=sec['grid_row'], column=0,
@@ -1703,26 +1780,26 @@ class YouTubeDownloaderApp:
 
     def _reset_pending_playlist(self):
         self._pending_playlist = None
-        self._pl_status_var.set("Keine Playlist geladen.")
+        self._pl_status_var.set('Keine Playlist geladen.')
 
     def _update_pl_status(self, text: str):
         self.root.after(0, lambda: self._pl_status_var.set(text))
 
     def browse_folder(self, kind):
-        d = filedialog.askdirectory(title=f"{kind.capitalize()} – Zielordner")
+        d = filedialog.askdirectory(title=f'{kind.capitalize()} – Zielordner')
         if d:
             (self.audio_path_var if kind == 'audio' else self.video_path_var).set(d)
 
     def paste_link(self):
         try:
             self.url_text.insert(END, self.root.clipboard_get().strip() + '\n')
-            self.set_status("Link eingefügt.")
+            self.set_status('Link eingefügt.')
             self.root.after(50, self._on_url_change)
         except Exception as e:
-            messagebox.showerror("Fehler", f"Zwischenablage leer:\n{e}")
+            messagebox.showerror('Fehler', f'Zwischenablage leer:\n{e}')
 
     def clear_link(self):
-        self.url_text.delete("1.0", END)
+        self.url_text.delete('1.0', END)
         self.title_label.config(text='')
         self._video_formats = []
         self._audio_formats = []
@@ -1732,19 +1809,20 @@ class YouTubeDownloaderApp:
             cb.current(0)
         self._reset_progress()
         self._reset_pending_playlist()
-        self.set_status("Felder geleert.")
+        self.set_status('Felder geleert.')
 
     def _open_folder_if_wanted(self, dest):
+        """Öffnet den Zielordner automatisch nach dem Download (wenn Option aktiv)."""
         if self.open_folder_var.get():
-            Popen(f'explorer "{dest}"')
+            _open_folder(dest)
 
     def _open_folder_direct(self, folder: str):
-        """Öffnet den angegebenen Ordner sofort im Explorer (erstellt ihn wenn nötig)."""
+        """Öffnet den angegebenen Ordner sofort im Dateimanager (erstellt ihn wenn nötig)."""
         if not folder:
-            messagebox.showwarning("Kein Pfad", "Bitte zuerst einen Zielordner eingeben.")
+            messagebox.showwarning('Kein Pfad', 'Bitte zuerst einen Zielordner eingeben.')
             return
         self._ensure_dir(folder)
-        Popen(f'explorer "{os.path.normpath(folder)}"')
+        _open_folder(folder)
 
     # ═════════════════════════════════════════════════════════════════════════
     #  yt-dlp Basis-Optionen
@@ -1766,6 +1844,9 @@ class YouTubeDownloaderApp:
         # Das interne Format ist ein Dict: {'runtime_name': {optionaler 'path': ...}}
         # Unterstützte Keys: 'deno', 'node', 'bun', 'quickjs'
         node_path = shutil.which('node')
+        if not node_path and os.path.exists('/usr/bin/node'):
+            # Fallback für Linux-Systeme, wo node nicht im PATH liegt
+            node_path = '/usr/bin/node'
         if node_path:
             opts['js_runtimes'] = {'node': {'path': node_path}}
         browser = self.cookies_browser_var.get().strip()
@@ -1849,32 +1930,32 @@ class YouTubeDownloaderApp:
     #  Fortschritts-Hook
     # ═════════════════════════════════════════════════════════════════════════
 
-    def _make_hook(self, prefix="Lade...", idx=0, total=1):
+    def _make_hook(self, prefix='Lade...', idx=0, total=1):
         def hook(d):
             # ── Abbrechen: sofort Exception werfen → yt-dlp bricht ab ──────────
             if self._cancel_flag:
-                raise Exception("Download abgebrochen.")
+                raise Exception('Download abgebrochen.')
 
             # ── Pause: blockieren bis Weiter gedrückt wird ──────────────────────
             if not self._pause_event.is_set():
                 self._pause_event.wait()
                 # Nach dem Warten erneut auf Cancel prüfen
                 if self._cancel_flag:
-                    raise Exception("Download abgebrochen.")
+                    raise Exception('Download abgebrochen.')
 
             if d['status'] == 'downloading':
                 tb = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
                 db = d.get('downloaded_bytes', 0)
                 sp = d.get('speed') or 0
-                sp_s = f"  •  {sp/1024/1024:.1f} MB/s" if sp else ""
+                sp_s = f'  •  {sp/1024/1024:.1f} MB/s' if sp else ''
                 if tb > 0:
                     item_pct = db / tb * 100
                     overall  = (idx / total * 100) + (item_pct / total)
-                    lbl = f"{idx+1}/{total}" if total > 1 else f"{item_pct:.0f} %"
+                    lbl = f'{idx+1}/{total}' if total > 1 else f'{item_pct:.0f} %'
                     self.root.after(0, lambda p=overall, l=lbl, s=sp_s: (
                         self._progress_pct.set(p),
                         self._pct_label.config(text=l),
-                        self.status_var.set(f"{prefix}{s}")))
+                        self.status_var.set(f'{prefix}{s}')))
                 else:
                     cur = self._progress_pct.get()
                     self.root.after(0,
@@ -1883,7 +1964,7 @@ class YouTubeDownloaderApp:
                 p = (idx + 1) / total * 100
                 self.root.after(0, lambda p=p: (
                     self._progress_pct.set(p),
-                    self._pct_label.config(text=f"{p:.0f} %")))
+                    self._pct_label.config(text=f'{p:.0f} %')))
         return hook
 
     # ═════════════════════════════════════════════════════════════════════════
@@ -1894,11 +1975,11 @@ class YouTubeDownloaderApp:
         def worker():
             urls = self._get_urls()
             if not urls:
-                messagebox.showwarning("Fehler", "Keine gültige URL eingegeben!")
+                messagebox.showwarning('Fehler', 'Keine gültige URL eingegeben!')
                 return
             url = urls[0]
             p   = _parse_yt_url(url)
-            self.root.after(0, lambda: self.set_status("Analysiere...", True))
+            self.root.after(0, lambda: self.set_status('Analysiere...', True))
             try:
                 # ── Fall 1: Video mit Playlist-Kontext ────────────────────────
                 if p['is_video_in_playlist']:
@@ -1928,7 +2009,7 @@ class YouTubeDownloaderApp:
                     self._video_formats = vfmts
                     self._audio_formats = afmts
                     video_title = full.get('title', '')
-                    index_hint  = f"  (Index {p['index']})" if p['index'] else ""
+                    index_hint  = f"  (Index {p['index']})" if p['index'] else ''
                     cnt = len(pl_entries)
                     cnt_dl = sum(1 for e in pl_entries if not _is_unavailable_entry(e))
 
@@ -1940,18 +2021,18 @@ class YouTubeDownloaderApp:
                         }
 
                     status_txt = (
-                        f"Analyse fertig – {len(vfmts)}V/{len(afmts)}A-Streams"
-                        + (f"  |  Playlist: {cnt_dl}/{cnt} downloadbar" if cnt else ""))
+                        f'Analyse fertig – {len(vfmts)}V/{len(afmts)}A-Streams'
+                        + (f'  |  Playlist: {cnt_dl}/{cnt} downloadbar' if cnt else ''))
                     pl_status  = (
-                        f"📋 {pl_title}  ({cnt_dl}/{cnt} downloadbar) – Playlist geladen."
-                        if cnt else "Playlist konnte nicht geladen werden.")
+                        f'📋 {pl_title}  ({cnt_dl}/{cnt} downloadbar) – Playlist geladen.'
+                        if cnt else 'Playlist konnte nicht geladen werden.')
 
                     self.root.after(0, lambda: (
                         self._toggle_advanced(force_open=True),
                         self._toggle_playlist(force_open=True),
                         self.title_label.config(
-                            text=f"📹 {video_title}{index_hint}"
-                                 + (f"  –  Playlist: {pl_title}" if pl_title else "")),
+                            text=f'📹 {video_title}{index_hint}'
+                                 + (f'  –  Playlist: {pl_title}' if pl_title else '')),
                         self.video_combo.__setitem__('values',
                             [f['label'] for f in vfmts] + [_NO_VIDEO]),
                         self.video_combo.current(0),
@@ -1980,11 +2061,11 @@ class YouTubeDownloaderApp:
                     pl_title = info.get('title', '')
                     self.root.after(0, lambda: (
                         self.title_label.config(
-                            text=f"📋 Playlist: {pl_title}  ({cnt_dl}/{cnt} downloadbar)"),
-                        self.set_status(f"Playlist erkannt – {cnt_dl}/{cnt} downloadbar"),
+                            text=f'📋 Playlist: {pl_title}  ({cnt_dl}/{cnt} downloadbar)'),
+                        self.set_status(f'Playlist erkannt – {cnt_dl}/{cnt} downloadbar'),
                         self._toggle_playlist(force_open=True),
                         self._pl_status_var.set(
-                            f"📋 {pl_title}  ({cnt_dl}/{cnt} downloadbar) – Playlist geladen."),
+                            f'📋 {pl_title}  ({cnt_dl}/{cnt} downloadbar) – Playlist geladen.'),
                         self.video_combo.__setitem__('values', [_PLACEHOLDER_PLAYLIST]),
                         self.video_combo.current(0),
                         self.audio_combo.__setitem__('values', [_PLACEHOLDER_PLAYLIST]),
@@ -2011,13 +2092,13 @@ class YouTubeDownloaderApp:
                         [f['label'] for f in afmts] + [_NO_AUDIO]),
                     self.audio_combo.current(0),
                     self.set_status(
-                        f"Analyse fertig – {len(vfmts)} Video / {len(afmts)} Audio-Streams")))
+                        f'Analyse fertig – {len(vfmts)} Video / {len(afmts)} Audio-Streams')))
 
             except Exception as e:
                 err_msg = str(e)
                 self.root.after(0, lambda m=err_msg: (
-                    self.set_status("Fehler bei Analyse"),
-                    messagebox.showerror("Fehler", f"Analyse-Fehler:\n{m}")))
+                    self.set_status('Fehler bei Analyse'),
+                    messagebox.showerror('Fehler', f'Analyse-Fehler:\n{m}')))
 
         Thread(target=worker, daemon=True).start()
 
@@ -2031,13 +2112,13 @@ class YouTubeDownloaderApp:
             ext = f.get('ext', '?')
             sz  = f.get('filesize') or f.get('filesize_approx') or 0
             smb = round(sz / 1048576, 1) if sz else 0
-            ss  = f"  •  {smb}MB" if smb else ""
+            ss  = f'  •  {smb}MB' if smb else ''
             if vc != 'none' and ac == 'none':
                 res = f.get('resolution') or f"{f.get('height','?')}p"
                 fps = f.get('fps') or ''
-                lbl = (f"{ext}  •  {res}"
+                lbl = (f'{ext}  •  {res}'
                        f"{'  •  '+str(fps)+'fps' if fps else ''}"
-                       f"  •  {vc}{ss}  [id:{fid}]")
+                       f'  •  {vc}{ss}  [id:{fid}]')
                 vfmts.append({'label': lbl, 'format_id': fid, 'ext': ext,
                               'height': f.get('height', 0) or 0, 'size_mb': smb})
             elif ac != 'none' and vc == 'none':
@@ -2077,7 +2158,7 @@ class YouTubeDownloaderApp:
             self._playlist_event.set()
 
     def _request_playlist_popup(self, entries, default_mode, default_bitrate,
-                                 title_prefix="Playlist") -> dict | None:
+                                 title_prefix='Playlist') -> dict | None:
         self._playlist_event  = threading.Event()
         self._playlist_result = None
         self._playlist_cancel = False
@@ -2120,7 +2201,7 @@ class YouTubeDownloaderApp:
                 urls = self._get_urls()
                 if not urls:
                     self.root.after(0, lambda: messagebox.showwarning(
-                        "Kein URL", "Bitte zuerst eine Playlist-URL eingeben."))
+                        'Kein URL', 'Bitte zuerst eine Playlist-URL eingeben.'))
                     return
                 url = urls[0]
                 p   = _parse_yt_url(url)
@@ -2128,8 +2209,8 @@ class YouTubeDownloaderApp:
                 fetch_url = (f"https://www.youtube.com/playlist?list={p['list_id']}"
                              if p['is_video_in_playlist'] and p['list_id'] else url)
 
-                self.root.after(0, lambda: self.set_status("Playlist wird geladen...", True))
-                self._update_pl_status("⏳ Lade Playlist-Informationen...")
+                self.root.after(0, lambda: self.set_status('Playlist wird geladen...', True))
+                self._update_pl_status('⏳ Lade Playlist-Informationen...')
 
                 try:
                     opts = self._base_opts()
@@ -2140,18 +2221,18 @@ class YouTubeDownloaderApp:
                 except Exception as e:
                     err = str(e)
                     self.root.after(0, lambda m=err: (
-                        self.set_status("Fehler beim Laden"),
-                        messagebox.showerror("Fehler", f"Playlist nicht abrufbar:\n{m}")))
-                    self._update_pl_status("❌ Fehler beim Laden.")
+                        self.set_status('Fehler beim Laden'),
+                        messagebox.showerror('Fehler', f'Playlist nicht abrufbar:\n{m}')))
+                    self._update_pl_status('❌ Fehler beim Laden.')
                     return
 
                 if info.get('_type') != 'playlist':
                     self.root.after(0, lambda: messagebox.showinfo(
-                        "Keine Playlist",
-                        "Die URL verweist auf keine Playlist.\n"
-                        "Bitte eine Playlist-URL eingeben."))
-                    self._update_pl_status("❌ Keine Playlist erkannt.")
-                    self.root.after(0, lambda: self.set_status("Keine Playlist erkannt."))
+                        'Keine Playlist',
+                        'Die URL verweist auf keine Playlist.\n'
+                        'Bitte eine Playlist-URL eingeben.'))
+                    self._update_pl_status('❌ Keine Playlist erkannt.')
+                    self.root.after(0, lambda: self.set_status('Keine Playlist erkannt.'))
                     return
 
                 entries  = _deduplicate_entries(list(info.get('entries', [])))
@@ -2159,8 +2240,8 @@ class YouTubeDownloaderApp:
 
                 if not entries:
                     self.root.after(0, lambda: messagebox.showinfo(
-                        "Leer", "Playlist scheint leer zu sein."))
-                    self._update_pl_status("❌ Playlist ist leer.")
+                        'Leer', 'Playlist scheint leer zu sein.'))
+                    self._update_pl_status('❌ Playlist ist leer.')
                     return
 
             self._update_pl_status(
@@ -2183,12 +2264,12 @@ class YouTubeDownloaderApp:
                 entries,
                 default_mode    = self._cfg.get('playlist_mode', 'audio_mp3'),
                 default_bitrate = self._cfg.get('playlist_bitrate', self.quick_bitrate_var.get()),
-                title_prefix    = f"Playlist: {pl_title}")
+                title_prefix    = f'Playlist: {pl_title}')
 
             if result is None:
                 self._update_pl_status(
-                    f"⚠ Bearbeitung abgebrochen – {len(entries)} Einträge verfügbar")
-                self.root.after(0, lambda: self.set_status("Abgebrochen."))
+                    f'⚠ Bearbeitung abgebrochen – {len(entries)} Einträge verfügbar')
+                self.root.after(0, lambda: self.set_status('Abgebrochen.'))
                 return
 
             # Modus & Bitrate für nächste Öffnung merken
@@ -2211,9 +2292,9 @@ class YouTubeDownloaderApp:
                 f"✅ '{pl_title}': {n_sel}/{len(entries)} Einträge, "
                 f"Modus: {mode_lbl} → jetzt 'Playlist herunterladen' drücken")
             self.root.after(0, lambda: self.set_status(
-                f"Playlist bereit: {n_sel} Einträge ausgewählt"))
+                f'Playlist bereit: {n_sel} Einträge ausgewählt'))
 
-        self._update_pl_status("⏳ Wird vorbereitet...")
+        self._update_pl_status('⏳ Wird vorbereitet...')
         Thread(target=worker, daemon=True).start()
 
     def download_pending_playlist(self):
@@ -2221,7 +2302,7 @@ class YouTubeDownloaderApp:
             pending = self._pending_playlist
             if not pending or not pending.get('entries'):
                 self.root.after(0, lambda: messagebox.showwarning(
-                    "Keine Playlist",
+                    'Keine Playlist',
                     "Bitte zuerst eine Playlist-URL analysieren\n"
                     "oder 'Playlist bearbeiten' ausführen."))
                 return
@@ -2237,25 +2318,25 @@ class YouTubeDownloaderApp:
                     entries,
                     default_mode    = self._cfg.get('playlist_mode', 'audio_mp3'),
                     default_bitrate = self._cfg.get('playlist_bitrate', '0'),
-                    title_prefix    = f"Playlist: {pl_title}")
+                    title_prefix    = f'Playlist: {pl_title}')
                 if result is None:
-                    self.root.after(0, lambda: self.set_status("Abgebrochen."))
+                    self.root.after(0, lambda: self.set_status('Abgebrochen.'))
                     return
 
             mode    = result['mode']
             bitrate = result['bitrate']
-            prefix  = MODES_DICT.get(mode, "Download")
+            prefix  = MODES_DICT.get(mode, 'Download')
 
             resolved = [_entry_url(entries[i]) for i in result['indices']]
             if not resolved:
                 self.root.after(0, lambda: messagebox.showwarning(
-                    "Leer", "Keine URLs zum Herunterladen."))
+                    'Leer', 'Keine URLs zum Herunterladen.'))
                 return
 
             self._pending_playlist = None
-            self._update_pl_status("⬇ Download läuft...")
+            self._update_pl_status('⬇ Download läuft...')
             self._run_urls(resolved, mode, bitrate, prefix)
-            self._update_pl_status("Keine Playlist geladen.")
+            self._update_pl_status('Keine Playlist geladen.')
 
         Thread(target=worker, daemon=True).start()
 
@@ -2275,7 +2356,6 @@ class YouTubeDownloaderApp:
             opts['postprocessors'] = [mp3_pp] + [
                 p for p in pps if p.get('key') != 'FFmpegExtractAudio']
 
-
         elif mode == 'audio_opus':
             dest = self.audio_path_var.get()
             opts.update({
@@ -2294,6 +2374,20 @@ class YouTubeDownloaderApp:
                 p for p in pps
                 if p.get('key') not in ('FFmpegExtractAudio', 'EmbedThumbnail')]
             opts['convert_thumbnails'] = False
+
+        elif mode == 'video_mp4_m4a':
+            # MP4-Video + M4A-Audio: beide Streams liegen nativ auf den YouTube-Servern
+            # → kein Re-Encoding nötig, schnelles Mergen, maximale Kompatibilität
+            # (kein AV1-Codec, funktioniert auch in Playern ohne AV1-Unterstützung)
+            dest = self.video_path_var.get()
+            opts.update({
+                'format': ('bestvideo[ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]'
+                           '/bestvideo[ext=mp4]+bestaudio[ext=m4a]'
+                           '/bestvideo[ext=mp4]+bestaudio'
+                           '/best'),
+                'outtmpl': path.join(dest, '%(title)s.%(ext)s'),
+                'merge_output_format': 'mp4',
+            })
 
         elif mode == 'video_mp4':
             dest = self.video_path_var.get()
@@ -2353,7 +2447,7 @@ class YouTubeDownloaderApp:
         self._pause_event.set()
         self._set_download_active(True)
         self.root.after(0, lambda: self.set_status(
-            f"Starte Download: {total} Datei(en)...", True))
+            f'Starte Download: {total} Datei(en)...', True))
 
         # Zielordner und Basis-Opts einmalig bestimmen
         base_opts, dest = self._build_opts_for_mode(mode, bitrate)
@@ -2373,11 +2467,11 @@ class YouTubeDownloaderApp:
             item_opts, final_path_ref = _collect_final_path(item_opts)
             item_opts['progress_hooks'] = list(item_opts.get('progress_hooks') or []) + [
                 self._make_hook(
-                    f"{prefix} ({i+1}/{total})" if total > 1 else prefix,
+                    f'{prefix} ({i+1}/{total})' if total > 1 else prefix,
                     idx=i, total=total)]
 
             self.root.after(0, lambda i=i, t=total: self.status_var.set(
-                f"Download {i+1} von {t}..." if t > 1 else "Download läuft..."))
+                f'Download {i+1} von {t}...' if t > 1 else 'Download läuft...'))
 
             try:
                 with yt_dlp.YoutubeDL(item_opts) as ydl:
@@ -2391,14 +2485,14 @@ class YouTubeDownloaderApp:
                 if silent_errors:
                     skipped.append(url)
                     self.root.after(0, lambda u=url, err=str(e): self.status_var.set(
-                        f"Übersprungen: {u[:60]}…"))
+                        f'Übersprungen: {u[:60]}…'))
                     continue
                 keep_going = [True]
                 ev = threading.Event()
                 def _ask(err=str(e), u=url):
                     keep_going[0] = messagebox.askyesno(
-                        "Fehler",
-                        f"Fehler bei:\n{u}\n\n{err}\n\nWeiter mit restlichen URLs?")
+                        'Fehler',
+                        f'Fehler bei:\n{u}\n\n{err}\n\nWeiter mit restlichen URLs?')
                     ev.set()
                 self.root.after(0, _ask)
                 ev.wait(30)
@@ -2409,21 +2503,21 @@ class YouTubeDownloaderApp:
 
         if done:
             n   = len(done)
-            cancelled_hint = "  (abgebrochen)" if self._cancel_flag else ""
-            msg = f"✅ {n} Datei(en) heruntergeladen{cancelled_hint}"
+            cancelled_hint = '  (abgebrochen)' if self._cancel_flag else ''
+            msg = f'✅ {n} Datei(en) heruntergeladen{cancelled_hint}'
             if skipped:
-                msg += f"\n⚠ {len(skipped)} übersprungen (gelöscht/privat/Fehler)"
+                msg += f'\n⚠ {len(skipped)} übersprungen (gelöscht/privat/Fehler)'
             if n == 1:
-                msg += f"\n\n{done[0]}"
+                msg += f'\n\n{done[0]}'
             self.root.after(0, lambda: (
-                self.set_status("Download abgeschlossen!" if not self._cancel_flag
-                                else "Download abgebrochen."),
+                self.set_status('Download abgeschlossen!' if not self._cancel_flag
+                                else 'Download abgebrochen.'),
                 self._reset_progress(),
-                messagebox.showinfo("Erfolg", msg),
+                messagebox.showinfo('Erfolg', msg),
                 self._open_folder_if_wanted(dest)))
         else:
             self.root.after(0, lambda: (
-                self.set_status("Kein Download abgeschlossen."),
+                self.set_status('Kein Download abgeschlossen.'),
                 self._reset_progress()))
 
     def _resolve_and_run(self, urls: list, mode: str, bitrate: str, prefix: str):
@@ -2431,13 +2525,13 @@ class YouTubeDownloaderApp:
         Wird aus den Schnell-Download-Methoden aufgerufen.
         Löst URLs auf (Playlist-Dialog wenn nötig) und startet _run_urls.
         """
-        self.root.after(0, lambda: self.set_status("URLs werden geprüft...", True))
+        self.root.after(0, lambda: self.set_status('URLs werden geprüft...', True))
         resolved = []
 
         if len(urls) > 1:
             result = self._request_multiurl_popup(urls, mode, bitrate)
             if result is None:
-                self.root.after(0, lambda: self.set_status("Abgebrochen."))
+                self.root.after(0, lambda: self.set_status('Abgebrochen.'))
                 self._reset_progress()
                 return
             urls    = result['urls']
@@ -2465,7 +2559,7 @@ class YouTubeDownloaderApp:
                     # Konkreter Index → nur dieses eine Video
                     single_url = _resolve_entry_from_playlist(entries, p) or urls[0]
                     self.root.after(0, lambda idx=p['index']: self.set_status(
-                        f"Lade Video {idx} aus Playlist...", True))
+                        f'Lade Video {idx} aus Playlist...', True))
                     self._run_urls([single_url], mode, bitrate, prefix, silent_errors=True)
                 else:
                     # Playlist ohne Index → alle downloadbaren
@@ -2478,7 +2572,7 @@ class YouTubeDownloaderApp:
                             f"Playlist '{t}': {n}/{tot} downloadbare Einträge werden geladen...", True))
                         self._run_urls(resolved, mode, bitrate, prefix, silent_errors=True)
                     else:
-                        self.root.after(0, lambda: self.set_status("Keine downloadbaren Einträge in der Playlist."))
+                        self.root.after(0, lambda: self.set_status('Keine downloadbaren Einträge in der Playlist.'))
                 return
             # URL gehört nicht zur gespeicherten Playlist → normal weiterverarbeiten
 
@@ -2530,7 +2624,7 @@ class YouTubeDownloaderApp:
                 except Exception as e:
                     ev = threading.Event()
                     self.root.after(0, lambda e=e, u=url: (
-                        messagebox.showerror("Fehler", f"Kanal nicht abrufbar:\n{u}\n\n{e}"),
+                        messagebox.showerror('Fehler', f'Kanal nicht abrufbar:\n{u}\n\n{e}'),
                         ev.set()))
                     ev.wait(15)
                     return
@@ -2576,9 +2670,9 @@ class YouTubeDownloaderApp:
                     item_opts = _resolve_outtmpl_unique(v_url, item_opts, known)
                     item_opts, fp_ref = _collect_final_path(item_opts)
                     item_opts['progress_hooks'] = list(item_opts.get('progress_hooks') or []) + [
-                        self._make_hook(f"{prefix} ({i+1}/{total_ch})", idx=i, total=total_ch)]
+                        self._make_hook(f'{prefix} ({i+1}/{total_ch})', idx=i, total=total_ch)]
                     self.root.after(0, lambda i=i, t=total_ch: self.status_var.set(
-                        f"Download {i+1}/{t}..."))
+                        f'Download {i+1}/{t}...'))
                     try:
                         with yt_dlp.YoutubeDL(item_opts) as ydl:
                             info_dl = ydl.extract_info(v_url)
@@ -2589,20 +2683,20 @@ class YouTubeDownloaderApp:
                         if self._cancel_flag:
                             break
                         self.root.after(0, lambda u=v_url, err=str(e): self.status_var.set(
-                            f"Übersprungen: {u[:50]}…"))
+                            f'Übersprungen: {u[:50]}…'))
                         continue
                 self._set_download_active(False)
                 n = len(done_ch)
                 if n:
-                    msg = f"✅ {n} Datei(en) heruntergeladen\nOrdner: {ch_dest}"
+                    msg = f'✅ {n} Datei(en) heruntergeladen\nOrdner: {ch_dest}'
                     self.root.after(0, lambda: (
-                        self.set_status("Download abgeschlossen!"),
+                        self.set_status('Download abgeschlossen!'),
                         self._reset_progress(),
-                        messagebox.showinfo("Erfolg", msg),
+                        messagebox.showinfo('Erfolg', msg),
                         self._open_folder_if_wanted(ch_dest)))
                 else:
                     self.root.after(0, lambda: (
-                        self.set_status("Kein Download abgeschlossen."),
+                        self.set_status('Kein Download abgeschlossen.'),
                         self._reset_progress()))
                 return
 
@@ -2615,7 +2709,7 @@ class YouTubeDownloaderApp:
             except Exception as e:
                 ev = threading.Event()
                 self.root.after(0, lambda e=e, u=url: (
-                    messagebox.showerror("Fehler", f"URL nicht abrufbar:\n{u}\n\n{e}"),
+                    messagebox.showerror('Fehler', f'URL nicht abrufbar:\n{u}\n\n{e}'),
                     ev.set()))
                 ev.wait(15)
                 return
@@ -2635,7 +2729,7 @@ class YouTubeDownloaderApp:
                 resolved.append(url)
 
         if not resolved:
-            self.root.after(0, lambda: self.set_status("Keine URLs zum Herunterladen."))
+            self.root.after(0, lambda: self.set_status('Keine URLs zum Herunterladen.'))
             return
 
         self._run_urls(resolved, mode, bitrate, prefix, silent_errors=True)
@@ -2649,21 +2743,23 @@ class YouTubeDownloaderApp:
         def t():
             urls = self._get_urls()
             if not urls:
-                messagebox.showwarning("Fehler", "Keine URL eingegeben!")
+                messagebox.showwarning('Fehler', 'Keine URL eingegeben!')
                 return
             self._resolve_and_run(urls, mode, bitrate, label)
         Thread(target=t, daemon=True).start()
 
-    def quick_audio_mp3(self):   self._quick_download('audio_mp3',  '0', "🎵 Audio (MP3) lädt...")
-    def quick_audio_opus(self):  self._quick_download('audio_opus', '0', "🎵 Audio (Opus) lädt...")
-    def quick_video_mp4(self):   self._quick_download('video_mp4',  '0', "🎬 Video (MP4) lädt...")
-    def quick_video_best(self):  self._quick_download('video_best', '0', "🎬 Video Max lädt...")
+    def quick_audio_mp3(self):       self._quick_download('audio_mp3',    '0', '🎵 Audio (MP3) lädt...')
+    def quick_audio_opus(self):      self._quick_download('audio_opus',   '0', '🎵 Audio (Opus) lädt...')
+    def quick_video_mp4_m4a(self):   self._quick_download('video_mp4_m4a','0', '🎬 Video (MP4+M4A) lädt...')
+    def quick_video_mp4(self):       self._quick_download('video_mp4',    '0', '🎬 Video (MP4) lädt...')
+    def quick_video_best(self):      self._quick_download('video_best',   '0', '🎬 Video Max lädt...')
 
     # Kompatibilitäts-Aliase
-    def download_audio(self):      self.quick_audio_mp3()
-    def download_audio_opus(self): self.quick_audio_opus()
-    def download_video(self):      self.quick_video_mp4()
-    def download_video_best(self):  self.quick_video_best()
+    def download_audio(self):         self.quick_audio_mp3()
+    def download_audio_opus(self):    self.quick_audio_opus()
+    def download_video_mp4_m4a(self): self.quick_video_mp4_m4a()
+    def download_video(self):         self.quick_video_mp4()
+    def download_video_best(self):    self.quick_video_best()
 
     # ═════════════════════════════════════════════════════════════════════════
     #  Erweiterter Custom-Download (Einzelvideo-Auswahl)
@@ -2676,16 +2772,16 @@ class YouTubeDownloaderApp:
             a_lbl = self.clicked_stream_audio.get()
 
             if not urls:
-                messagebox.showwarning("Fehler", "Keine URL eingegeben!")
+                messagebox.showwarning('Fehler', 'Keine URL eingegeben!')
                 return
 
             no_v = v_lbl in _SKIP_LABELS or self.ignore_video_var.get()
             no_a = a_lbl in _SKIP_LABELS or self.ignore_audio_var.get()
 
             if no_v and no_a:
-                messagebox.showwarning("Fehler",
-                    "Bitte zuerst eine Einzel-URL analysieren und Stream wählen!\n"
-                    "(Oder: Video/Audio-ignorieren-Checkbox deaktivieren.)")
+                messagebox.showwarning('Fehler',
+                    'Bitte zuerst eine Einzel-URL analysieren und Stream wählen!\n'
+                    '(Oder: Video/Audio-ignorieren-Checkbox deaktivieren.)')
                 return
 
             vfmt = afmt = None
@@ -2699,7 +2795,7 @@ class YouTubeDownloaderApp:
                     if f['label'] == a_lbl:
                         afmt = f['format_id']; break
 
-            fmt_str = (f"{vfmt}+{afmt}" if vfmt and afmt
+            fmt_str = (f'{vfmt}+{afmt}' if vfmt and afmt
                        else vfmt if vfmt else afmt)
             dest = (self.video_path_var.get() if vfmt
                     else self.audio_path_var.get())
@@ -2750,7 +2846,7 @@ class YouTubeDownloaderApp:
                     opts.pop('_mp3_embed_ffmpeg', None)
                     opts.pop('_opus_embed_ffmpeg', None)
 
-            self.root.after(0, lambda: self.set_status("Download läuft...", True))
+            self.root.after(0, lambda: self.set_status('Download läuft...', True))
 
             known_names_custom = _scan_existing_stems(dest)
             self._cancel_flag = False
@@ -2776,7 +2872,7 @@ class YouTubeDownloaderApp:
                             opts_pl = self._base_opts()
                             opts_pl['extract_flat'] = True
                             opts_pl['noplaylist']   = False
-                            playlist_url = (f"https://www.youtube.com/playlist"
+                            playlist_url = (f'https://www.youtube.com/playlist'
                                             f"?list={p_url['list_id']}")
                             with yt_dlp.YoutubeDL(opts_pl) as ydl:
                                 pl_info = ydl.extract_info(playlist_url, download=False)
@@ -2793,9 +2889,9 @@ class YouTubeDownloaderApp:
                 item_opts = _resolve_outtmpl_unique(url, item_opts, known_names_custom)
                 item_opts, final_path_ref = _collect_final_path(item_opts)
                 item_opts['progress_hooks'] = list(item_opts.get('progress_hooks') or []) + [
-                    self._make_hook("📥 Lädt...", i, total)]
+                    self._make_hook('📥 Lädt...', i, total)]
                 self.root.after(0, lambda i=i, t=total: self.status_var.set(
-                    f"Download {i+1}/{t}..." if t > 1 else "Download läuft..."))
+                    f'Download {i+1}/{t}...' if t > 1 else 'Download läuft...'))
                 try:
                     with yt_dlp.YoutubeDL(item_opts) as ydl:
                         info = ydl.extract_info(url)
@@ -2805,25 +2901,25 @@ class YouTubeDownloaderApp:
                 except Exception as e:
                     if self._cancel_flag:
                         break
-                    messagebox.showerror("Fehler", f"Fehler:\n{e}")
+                    messagebox.showerror('Fehler', f'Fehler:\n{e}')
             self._set_download_active(False)
 
             if done:
                 n   = len(done)
-                msg = f"✅ {n} Datei(en) heruntergeladen"
+                msg = f'✅ {n} Datei(en) heruntergeladen'
                 if n == 1:
-                    msg += f"\n\n{done[0]}"
+                    msg += f'\n\n{done[0]}'
                 self.root.after(0, lambda: (
-                    self.set_status("Download abgeschlossen!"),
+                    self.set_status('Download abgeschlossen!'),
                     self._reset_progress(),
-                    messagebox.showinfo("Erfolg", msg),
+                    messagebox.showinfo('Erfolg', msg),
                     self._open_folder_if_wanted(dest)))
 
         Thread(target=t, daemon=True).start()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
+if __name__ == '__main__':
     root = Tk()
     app = YouTubeDownloaderApp(root)
     root.mainloop()
