@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-__version__ = '5.0.4'
+__version__ = '5.1.0'
 
 """
 YouTube Downloader GUI  –  Plattformunabhängig (Windows / Linux / macOS)
@@ -10,7 +10,7 @@ aus YouTube-Links mit modernem Design und verbessertem Workflow.
 
 Author:  Waldemar Koch
 Co-Author: E.S.
-Updated: 2026 April 01
+Updated: 2026 Juni 01
 License: MIT
 
 Systemvoraussetzungen
@@ -35,6 +35,7 @@ import re
 import shutil
 import threading
 import platform
+import time
 import yt_dlp
 from tkinter import *
 from tkinter import ttk, filedialog, messagebox
@@ -731,6 +732,8 @@ class _BaseSelectionDialog(Toplevel):
         self._filter_count_var = StringVar()      # wird in _build() als Label-Quelle gesetzt
         self._list_canvas      = None             # wird in _build() gesetzt
         self._row_frames: list = []
+        self._row_visible: list[bool] = []
+        self._filter_after_id = None
         self._build()
 
     # ── Subklassen überschreiben diese zwei Methoden ──────────────────────────
@@ -766,7 +769,7 @@ class _BaseSelectionDialog(Toplevel):
                    command=lambda: self._search_var.set('')).pack(side='left')
         ttk.Label(sf, textvariable=self._filter_count_var,
                   font=('Segoe UI', 9), foreground='#555').pack(side='left', padx=(8, 0))
-        self._search_var.trace_add('write', lambda *_: self._filter_rows())
+        self._search_var.trace_add('write', lambda *_: self._queue_filter_rows())
         ttk.Separator(self).pack(fill='x')
 
         # Scrollbare Liste
@@ -852,24 +855,41 @@ class _BaseSelectionDialog(Toplevel):
         texts = self._get_row_texts()
         visible = 0
         total   = len(self._row_frames)
-        for row, text in zip(self._row_frames, texts):
+        if len(self._row_visible) != total:
+            self._row_visible = [True] * total
+        for idx, (row, text) in enumerate(zip(self._row_frames, texts)):
             show = (not term) or (term in text.lower())
+            if show == self._row_visible[idx]:
+                visible += 1 if show else 0
+                continue
             if show:
                 row.pack(fill='x', padx=4, pady=1)
                 visible += 1
             else:
                 row.pack_forget()
+            self._row_visible[idx] = show
         if term:
             self._filter_count_var.set(f'{visible}/{total} sichtbar')
         else:
             self._filter_count_var.set('')
-        # Scrollregion aktualisieren
         try:
-            self._list_canvas.update_idletasks()
-            self._list_canvas.configure(
-                scrollregion=self._list_canvas.bbox('all'))
+            self._list_canvas.after_idle(
+                lambda: self._list_canvas.configure(
+                    scrollregion=self._list_canvas.bbox('all')))
         except Exception:
             pass
+
+    def _queue_filter_rows(self):
+        if self._filter_after_id is not None:
+            try:
+                self.after_cancel(self._filter_after_id)
+            except Exception:
+                pass
+        self._filter_after_id = self.after(120, self._run_queued_filter_rows)
+
+    def _run_queued_filter_rows(self):
+        self._filter_after_id = None
+        self._filter_rows()
 
     def _toggle_bitrate(self):
         mode = self._mode_var.get()
@@ -1188,6 +1208,10 @@ class YouTubeDownloaderApp:
         self._video_formats: list = []
         self._audio_formats: list = []
         self._progress_pct = DoubleVar(value=0.0)
+        self._last_status_msg: str | None = None
+        self._progress_update_interval = 0.2
+        self._last_progress_update = 0.0
+        self._indeterminate_progress_value = 0.0
 
         # Popup-Synchronisation (GUI-Thread ↔ Download-Thread)
         self._pending_playlist: dict | None = None
@@ -1680,16 +1704,37 @@ class YouTubeDownloaderApp:
                 if l.strip().startswith('http')]
 
     def set_status(self, msg, show_progress=False):
-        self.status_var.set(msg)
+        if msg != self._last_status_msg:
+            self.status_var.set(msg)
+            self._last_status_msg = msg
         if show_progress:
+            self._last_progress_update = 0.0
+            self._indeterminate_progress_value = 0.0
             self._progress_pct.set(0.0)
             self._pct_label.config(text='')
-        self.root.update_idletasks()
 
     def _reset_progress(self):
         self.root.after(0, lambda: (
             self._progress_pct.set(0.0),
             self._pct_label.config(text='')))
+
+    def _queue_progress_update(self, progress=None, pct_label=None,
+                               status_msg=None, force=False):
+        now = time.monotonic()
+        if not force and now - self._last_progress_update < self._progress_update_interval:
+            return
+        self._last_progress_update = now
+
+        def _apply():
+            if progress is not None:
+                self._progress_pct.set(progress)
+            if pct_label is not None:
+                self._pct_label.config(text=pct_label)
+            if status_msg and status_msg != self._last_status_msg:
+                self.status_var.set(status_msg)
+                self._last_status_msg = status_msg
+
+        self.root.after(0, _apply)
 
     def _toggle_bitrate_state(self):
         if self.audio_format_var.get() == 'mp3':
@@ -1952,19 +1997,21 @@ class YouTubeDownloaderApp:
                     item_pct = db / tb * 100
                     overall  = (idx / total * 100) + (item_pct / total)
                     lbl = f'{idx+1}/{total}' if total > 1 else f'{item_pct:.0f} %'
-                    self.root.after(0, lambda p=overall, l=lbl, s=sp_s: (
-                        self._progress_pct.set(p),
-                        self._pct_label.config(text=l),
-                        self.status_var.set(f'{prefix}{s}')))
+                    self._queue_progress_update(
+                        progress=overall,
+                        pct_label=lbl,
+                        status_msg=f'{prefix}{sp_s}')
                 else:
-                    cur = self._progress_pct.get()
-                    self.root.after(0,
-                        lambda c=cur: self._progress_pct.set((c + 1) % 99))
+                    self._indeterminate_progress_value = (
+                        self._indeterminate_progress_value + 1) % 99
+                    self._queue_progress_update(
+                        progress=self._indeterminate_progress_value)
             elif d['status'] == 'finished':
                 p = (idx + 1) / total * 100
-                self.root.after(0, lambda p=p: (
-                    self._progress_pct.set(p),
-                    self._pct_label.config(text=f'{p:.0f} %')))
+                self._queue_progress_update(
+                    progress=p,
+                    pct_label=f'{p:.0f} %',
+                    force=True)
         return hook
 
     # ═════════════════════════════════════════════════════════════════════════
