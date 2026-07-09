@@ -1,4 +1,4 @@
-# YouTube Downloader GUI v5.0
+# YouTube Downloader GUI v5.1
 
 Eine benutzerfreundliche grafische Oberfläche zum Herunterladen von Audio und Video aus YouTube-Links – mit modernem Design, Playlist-Support, Cover-Einbettung und flexibler Stream-Auswahl.
 
