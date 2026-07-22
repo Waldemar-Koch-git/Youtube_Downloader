@@ -3853,10 +3853,14 @@ class YouTubeDownloaderApp(
         self.root.geometry(f'{self.ui_WEITE}x600')
         self.root.minsize(self.ui_WEITE, 600)
 
+        icon_dir = path.dirname(path.abspath(__file__))
         try:
-            self.root.iconbitmap('yt_symbol_small.ico')
-        except Exception:
-            pass
+            if IS_WINDOWS:
+                self.root.iconbitmap(path.join(icon_dir, 'yt_symbol_small.ico'))
+            else:
+                self.root.iconphoto(True, PhotoImage(file=path.join(icon_dir, 'yt_symbol_small.png')))
+        except Exception as e:
+            print(f'Warning: could not load window icon: {e}')
 
         # Variables
         self.language_var      = StringVar(value=LANG['code'])
