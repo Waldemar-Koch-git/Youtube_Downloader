@@ -2089,7 +2089,7 @@ class UIBuildMixin:
     Contract – expects on self:
         self.root, self._inner, self._canvas    (._inner/._canvas built here)
         self.i18n                  I18nRegistry
-        self.ui_WEITE               int
+        self.ui_width               int
         all the *_var Tkinter variables created in __init__ (audio_path_var,
             video_path_var, language_var, mp3_bitrate_var, ignore_video_var,
             ignore_audio_var, clicked_stream_video/audio, etc.)
@@ -2174,7 +2174,7 @@ class UIBuildMixin:
             screen_h = self.root.winfo_screenheight()
             usable_h = int(screen_h * 0.93)
             new_h    = min(content_h + 4, usable_h)
-            cur_w    = self.root.winfo_width() or self.ui_WEITE
+            cur_w    = self.root.winfo_width() or self.ui_width
             self.root.geometry(f'{cur_w}x{new_h}')
             self._initial_size_set = True
 
@@ -3849,9 +3849,9 @@ class YouTubeDownloaderApp(
     def __init__(self, root):
         self.root = root
         self.i18n = I18nRegistry()   # live text refresh for static widgets
-        self.ui_WEITE = 750
-        self.root.geometry(f'{self.ui_WEITE}x600')
-        self.root.minsize(self.ui_WEITE, 600)
+        self.ui_width = 750
+        self.root.geometry(f'{self.ui_width}x600')
+        self.root.minsize(self.ui_width, 600)
 
         icon_dir = path.dirname(path.abspath(__file__))
         try:
