@@ -3,145 +3,151 @@ setlocal enabledelayedexpansion
 
 echo.
 echo ========================================
-echo    yt-dlp Paketmanager - Update ^& Pruefung
+echo    yt-dlp Package Manager - Update ^& Check
 echo ========================================
 echo.
-echo [INFO] Pruefe Python-Umgebung...
+echo [INFO] Checking Python environment...
 echo.
 
-:: 1. Python-Verfuegbarkeit pruefen
+:: 1. Check Python availability
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo [FEHLER] Python ist nicht im Pfad oder nicht installiert!
+    echo [ERROR] Python is not on PATH or not installed!
     echo.
-    echo Bitte Python von https://www.python.org/ installieren.
-    echo Wichtig: Haken bei "Add Python to PATH" setzen!
+    echo Please install Python from https://www.python.org/
+    echo Important: check "Add Python to PATH" during installation!
     pause
     exit /b 1
 )
 
 for /f "tokens=*" %%i in ('python --version 2^>^&1') do set PYTHON_VER=%%i
-echo [OK] %PYTHON_VER% gefunden
+echo [OK] %PYTHON_VER% found
 echo.
 
-:: 2. pip-Verfuegbarkeit pruefen
+:: 2. Check pip availability
 python -m pip --version >nul 2>&1
 if errorlevel 1 (
-    echo [FEHLER] pip ist nicht verfuegbar!
+    echo [ERROR] pip is not available!
     echo.
-    echo Bitte pip installieren: python -m ensurepip --upgrade
+    echo Please install pip: python -m ensurepip --upgrade
     pause
     exit /b 1
 )
-echo [OK] pip ist verfuegbar
+echo [OK] pip is available
 echo.
 
-:: 3. Definierte Pakete
-::    Hinweis: FFmpeg wird NICHT mehr separat installiert.
-::    static-ffmpeg laedt und cached die aktuelle FFmpeg-Binary automatisch
-::    beim ersten Start des Downloaders.
-set "PAKETE[0]=yt-dlp[default]"
-set "PAKETE[1]=static-ffmpeg"
-set "PAKETE[2]=mutagen"
+:: 3. Defined packages
+::    Note: FFmpeg is NOT installed separately anymore.
+::    static-ffmpeg downloads and caches the current FFmpeg binary
+::    automatically on first start of the downloader.
+set "PACKAGES[0]=yt-dlp[default]"
+set "PACKAGES[1]=static-ffmpeg"
+set "PACKAGES[2]=mutagen"
 
 set "MISSING="
 
-:: 4. Pruefen, welche Pakete fehlen
-echo [INFO] Pruefe installierte Pakete...
+:: 4. Check which packages are missing
+::    Uses importlib.metadata (Python standard library) instead of the
+::    deprecated pkg_resources / setuptools, which is not guaranteed to
+::    be installed on every Python setup (e.g. some virtual environments).
+echo [INFO] Checking installed packages...
 echo.
 
 for /l %%i in (0,1,2) do (
-    set "paket=!PAKETE[%%i]!"
-    set "basis=!paket:[default]=!"
-    if "!basis!"=="" set "basis=!paket!"
+    set "package=!PACKAGES[%%i]!"
+    set "base=!package:[default]=!"
+    if "!base!"=="" set "base=!package!"
 
-    python -c "import pkg_resources; pkg_resources.get_distribution('!basis!')" >nul 2>&1
+    python -c "import importlib.metadata as m; m.version('!base!')" >nul 2>&1
     if errorlevel 1 (
-        echo [FEHLT] !paket!
-        set "MISSING=!MISSING! !paket!"
+        echo [MISSING] !package!
+        set "MISSING=!MISSING! !package!"
     ) else (
-        for /f "tokens=*" %%v in ('python -c "import pkg_resources; print(pkg_resources.get_distribution('!basis!').version)" 2^>^&1') do set "version=%%v"
-        echo [VORHANDEN] !paket! (Version: !version!)
+        for /f "tokens=*" %%v in ('python -c "import importlib.metadata as m; print(m.version('!base!'))" 2^>^&1') do set "version=%%v"
+        echo [FOUND] !package! (version: !version!)
     )
 )
 
 echo.
 
-:: 5. Pruefen auf verfuegbare Updates
-echo [INFO] Pruefe auf verfuegbare Updates...
+:: 5. Check for available updates
+echo [INFO] Checking for available updates...
 echo.
 
 set "HAS_UPDATES=0"
-for /l %%i in (0,1,2) do (
-    set "paket=!PAKETE[%%i]!"
-    set "basis=!paket:[default]=!"
-    if "!basis!"=="" set "basis=!paket!"
+python -m pip list --outdated --format=columns > "%TEMP%\ytdlp_outdated.txt" 2>nul
 
-    python -c "import pkg_resources; import subprocess; current=pkg_resources.get_distribution('!basis!').version; result=subprocess.run(['python', '-m', 'pip', 'index', 'versions', '!basis!'], capture_output=True, text=True); print('UPDATE' if current not in result.stdout else 'CURRENT')" 2>nul | findstr "UPDATE" >nul
+for /l %%i in (0,1,2) do (
+    set "package=!PACKAGES[%%i]!"
+    set "base=!package:[default]=!"
+    if "!base!"=="" set "base=!package!"
+
+    findstr /b /i "!base! " "%TEMP%\ytdlp_outdated.txt" >nul 2>&1
     if !errorlevel! equ 0 (
-        echo [UPDATE] Update verfuegbar fuer !paket!
+        echo [UPDATE] Update available for !package!
         set "HAS_UPDATES=1"
     ) else (
-        echo [AKTUELL] !paket! ist auf dem neuesten Stand
+        echo [CURRENT] !package! is up to date
     )
 )
 
+del "%TEMP%\ytdlp_outdated.txt" >nul 2>&1
 echo.
 
-:: 6. Falls Pakete fehlen oder Updates verfuegbar sind
+:: 6. If packages are missing or updates are available
 if not "%MISSING%"=="" (
-    echo [AKTION] Fehlende Pakete werden installiert...
+    echo [ACTION] Installing missing packages...
     echo.
-    python -m pip install %MISSING%
+    call :PipInstall install %MISSING%
 
-    if errorlevel 1 (
-        echo [FEHLER] Installation fehlgeschlagen!
+    if not "!PIPSTATUS!"=="0" (
+        echo [ERROR] Installation failed!
         pause
         exit /b 1
     )
-    echo [ERFOLG] Fehlende Pakete wurden installiert
+    echo [SUCCESS] Missing packages have been installed
     echo.
 )
 
 if "%HAS_UPDATES%"=="1" (
-    echo [AKTION] Updates werden installiert...
+    echo [ACTION] Installing updates...
     echo.
-    python -m pip install --upgrade yt-dlp[default] static-ffmpeg mutagen
+    call :PipInstall upgrade yt-dlp[default] static-ffmpeg mutagen
 
-    if errorlevel 1 (
-        echo [FEHLER] Update fehlgeschlagen!
+    if not "!PIPSTATUS!"=="0" (
+        echo [ERROR] Update failed!
         pause
         exit /b 1
     )
-    echo [ERFOLG] Alle Pakete wurden aktualisiert
+    echo [SUCCESS] All packages have been updated
     echo.
 ) else (
     if "%MISSING%"=="" (
-        echo [OK] Alle Pakete sind vorhanden und aktuell!
+        echo [OK] All packages are present and up to date!
         echo.
     )
 )
 
-:: 7. Abschluss
+:: 7. Summary
 echo ========================================
-echo   Aktuelle Installation:
+echo   Current installation:
 echo ========================================
 echo.
 
 yt-dlp --version 2>nul
 if errorlevel 1 (
-    echo yt-dlp: nicht im Pfad oder nicht verfuegbar
+    echo yt-dlp: not on PATH or not available
 ) else (
-    for /f "tokens=*" %%v in ('yt-dlp --version 2^>^&1') do echo yt-dlp: Version %%v
+    for /f "tokens=*" %%v in ('yt-dlp --version 2^>^&1') do echo yt-dlp: version %%v
 )
 
-python -c "import static_ffmpeg; print('static-ffmpeg: installiert (FFmpeg wird beim ersten Programmstart automatisch geladen)')" 2>nul
-if errorlevel 1 echo static-ffmpeg: nicht verfuegbar
+python -c "import static_ffmpeg; print('static-ffmpeg: installed (FFmpeg is downloaded automatically on first program start)')" 2>nul
+if errorlevel 1 echo static-ffmpeg: not available
 
-python -c "import mutagen; print(f'mutagen: Version {mutagen.__version__}')" 2>nul
-if errorlevel 1 echo mutagen: nicht verfuegbar
+python -c "import importlib.metadata as m; print(f'mutagen: version {m.version(\"mutagen\")}')" 2>nul
+if errorlevel 1 echo mutagen: not available
 
 echo.
-echo [FERTIG] Alle Pruefungen abgeschlossen!
+echo [DONE] All checks completed!
 echo.
 pause

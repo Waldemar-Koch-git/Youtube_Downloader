@@ -2,156 +2,210 @@
 
 echo ""
 echo "========================================"
-echo "   yt-dlp Paketmanager - Update & Pruefung"
+echo "   yt-dlp Package Manager - Update & Check"
 echo "========================================"
 echo ""
-echo "[INFO] Pruefe Python-Umgebung..."
+echo "[INFO] Checking Python environment..."
 echo ""
 
-# Python-Befehl ermitteln (python3 bevorzugen)
+# Determine Python command (prefer python3)
 if command -v python3 &> /dev/null; then
     PYTHON_CMD="python3"
 elif command -v python &> /dev/null; then
     PYTHON_CMD="python"
 else
-    echo "[FEHLER] Python ist nicht installiert oder nicht im Pfad!"
+    echo "[ERROR] Python is not installed or not on PATH!"
     echo ""
-    echo "Bitte Python von https://www.python.org/ installieren."
-    echo "Unter Linux/macOS: python3 oder python."
+    echo "Please install Python from https://www.python.org/"
+    echo "On Linux/macOS: python3 or python."
     exit 1
 fi
 
-# Python-Version anzeigen
+# Show Python version
 PYTHON_VER=$($PYTHON_CMD --version 2>&1)
-echo "[OK] $PYTHON_VER gefunden"
+echo "[OK] $PYTHON_VER found"
 echo ""
 
-# pip-Verfügbarkeit prüfen
+# Check pip availability
 $PYTHON_CMD -m pip --version &> /dev/null
 if [ $? -ne 0 ]; then
-    echo "[FEHLER] pip ist nicht verfuegbar!"
+    echo "[ERROR] pip is not available!"
     echo ""
-    echo "Bitte pip installieren: $PYTHON_CMD -m ensurepip --upgrade"
+    echo "Please install pip: $PYTHON_CMD -m ensurepip --upgrade"
     exit 1
 fi
-echo "[OK] pip ist verfuegbar"
+echo "[OK] pip is available"
 echo ""
 
-# Definierte Pakete
-# Hinweis: FFmpeg wird NICHT mehr separat installiert.
-# static-ffmpeg laedt und cached die aktuelle FFmpeg-Binary automatisch
-# beim ersten Start des Downloaders.
-PAKETE=("yt-dlp[default]" "static-ffmpeg" "mutagen")
+# ─────────────────────────────────────────────────────────────────────────
+# Helper: pip_install <upgrade|install> <package> [package ...]
+#
+# On many modern distros (Debian/Ubuntu system Python, Homebrew Python on
+# macOS) pip refuses to install into the system Python at all and fails
+# with "externally-managed-environment" (PEP 668). This helper detects
+# that specific error and automatically retries once with
+# --break-system-packages, which is safe here because this script only
+# ever installs the three packages this app needs.
+# ─────────────────────────────────────────────────────────────────────────
+pip_install() {
+    local action="$1"
+    shift
+    local extra_args=()
+    if [ "$action" = "upgrade" ]; then
+        extra_args+=(--upgrade)
+    fi
 
-MISSING=""
+    local output
+    output=$($PYTHON_CMD -m pip install "${extra_args[@]}" "$@" 2>&1)
+    local status=$?
+
+    if [ $status -ne 0 ] && echo "$output" | grep -q "externally-managed-environment"; then
+        echo "[INFO] This Python installation is externally managed (PEP 668 –"
+        echo "       common on Debian/Ubuntu system Python and Homebrew Python)."
+        echo "[INFO] Retrying with --break-system-packages (installs only the"
+        echo "       3 packages this app needs, nothing else is touched)..."
+        echo ""
+        output=$($PYTHON_CMD -m pip install --break-system-packages "${extra_args[@]}" "$@" 2>&1)
+        status=$?
+    fi
+
+    echo "$output"
+
+    if [ $status -ne 0 ]; then
+        echo ""
+        echo "[HINT] If this still fails, consider a virtual environment instead:"
+        echo "       $PYTHON_CMD -m venv ~/.venvs/yt-downloader"
+        echo "       source ~/.venvs/yt-downloader/bin/activate"
+        echo "       pip install \"yt-dlp[default]\" mutagen"
+    fi
+
+    return $status
+}
+
+# Defined packages
+# Note: FFmpeg is NOT installed separately anymore.
+# static-ffmpeg downloads and caches the current FFmpeg binary automatically
+# on first start of the downloader (not needed at all on Linux/macOS, see README).
+PACKAGES=("yt-dlp[default]" "static-ffmpeg" "mutagen")
+
+MISSING=()
 HAS_UPDATES=0
 
-# Prüfen, welche Pakete fehlen
-echo "[INFO] Pruefe installierte Pakete..."
+# Check which packages are missing
+# Uses importlib.metadata (Python standard library) instead of the deprecated
+# pkg_resources / setuptools, which is not guaranteed to be installed on every
+# Python setup (e.g. a plain "python3 -m venv" on newer Python versions).
+echo "[INFO] Checking installed packages..."
 echo ""
 
-for PAKET in "${PAKETE[@]}"; do
-    # Basispaketnamen ohne [default] extrahieren
-    if [[ "$PAKET" == *"[default]"* ]]; then
-        BASIS="${PAKET%\[default\]}"
+for PACKAGE in "${PACKAGES[@]}"; do
+    # Strip the "[default]" extra to get the base package name
+    if [[ "$PACKAGE" == *"[default]"* ]]; then
+        BASE="${PACKAGE%\[default\]}"
     else
-        BASIS="$PAKET"
+        BASE="$PACKAGE"
     fi
 
-    $PYTHON_CMD -c "import pkg_resources; pkg_resources.get_distribution('$BASIS')" &> /dev/null
+    $PYTHON_CMD -c "import importlib.metadata as m; m.version('$BASE')" &> /dev/null
     if [ $? -ne 0 ]; then
-        echo "[FEHLT] $PAKET"
-        MISSING="$MISSING $PAKET"
+        echo "[MISSING] $PACKAGE"
+        MISSING+=("$PACKAGE")
     else
-        VERSION=$($PYTHON_CMD -c "import pkg_resources; print(pkg_resources.get_distribution('$BASIS').version)" 2>&1)
-        echo "[VORHANDEN] $PAKET (Version: $VERSION)"
+        VERSION=$($PYTHON_CMD -c "import importlib.metadata as m; print(m.version('$BASE'))" 2>&1)
+        echo "[FOUND] $PACKAGE (version: $VERSION)"
     fi
 done
 
 echo ""
 
-# Prüfen auf verfügbare Updates
-echo "[INFO] Pruefe auf verfuegbare Updates..."
+# Check for available updates
+echo "[INFO] Checking for available updates..."
 echo ""
 
-for PAKET in "${PAKETE[@]}"; do
-    if [[ "$PAKET" == *"[default]"* ]]; then
-        BASIS="${PAKET%\[default\]}"
+OUTDATED_LIST=$($PYTHON_CMD -m pip list --outdated --format=columns 2>/dev/null)
+
+for PACKAGE in "${PACKAGES[@]}"; do
+    if [[ "$PACKAGE" == *"[default]"* ]]; then
+        BASE="${PACKAGE%\[default\]}"
     else
-        BASIS="$PAKET"
+        BASE="$PACKAGE"
     fi
 
-    # Aktuelle Version ermitteln
-    CURRENT=$($PYTHON_CMD -c "import pkg_resources; print(pkg_resources.get_distribution('$BASIS').version)" 2>/dev/null)
-    # Prüfen, ob eine neuere Version auf PyPI existiert
-    OUTDATED=$($PYTHON_CMD -m pip list --outdated --format=columns | grep "^$BASIS " | awk '{print $2}')
+    # Only consider packages that are actually installed (skip missing ones here,
+    # they are handled by the install step below)
+    CURRENT=$($PYTHON_CMD -c "import importlib.metadata as m; print(m.version('$BASE'))" 2>/dev/null)
+    if [ -z "$CURRENT" ]; then
+        continue
+    fi
+
+    OUTDATED=$(echo "$OUTDATED_LIST" | grep "^$BASE " | awk '{print $2}')
     if [ -n "$OUTDATED" ]; then
-        echo "[UPDATE] Update verfuegbar fuer $PAKET (aktuell $CURRENT -> $OUTDATED)"
+        echo "[UPDATE] Update available for $PACKAGE (current $CURRENT -> $OUTDATED)"
         HAS_UPDATES=1
     else
-        echo "[AKTUELL] $PAKET ist auf dem neuesten Stand ($CURRENT)"
+        echo "[CURRENT] $PACKAGE is up to date ($CURRENT)"
     fi
 done
 
 echo ""
 
-# Fehlende Pakete installieren
-if [ -n "$MISSING" ]; then
-    echo "[AKTION] Fehlende Pakete werden installiert..."
+# Install missing packages
+if [ ${#MISSING[@]} -gt 0 ]; then
+    echo "[ACTION] Installing missing packages..."
     echo ""
-    $PYTHON_CMD -m pip install $MISSING
+    pip_install install "${MISSING[@]}"
     if [ $? -ne 0 ]; then
-        echo "[FEHLER] Installation fehlgeschlagen!"
+        echo "[ERROR] Installation failed!"
         exit 1
     fi
-    echo "[ERFOLG] Fehlende Pakete wurden installiert"
+    echo "[SUCCESS] Missing packages have been installed"
     echo ""
 fi
 
-# Updates durchführen
+# Install updates
 if [ $HAS_UPDATES -eq 1 ]; then
-    echo "[AKTION] Updates werden installiert..."
+    echo "[ACTION] Installing updates..."
     echo ""
-    $PYTHON_CMD -m pip install --upgrade yt-dlp[default] static-ffmpeg mutagen
+    pip_install upgrade "yt-dlp[default]" static-ffmpeg mutagen
     if [ $? -ne 0 ]; then
-        echo "[FEHLER] Update fehlgeschlagen!"
+        echo "[ERROR] Update failed!"
         exit 1
     fi
-    echo "[ERFOLG] Alle Pakete wurden aktualisiert"
+    echo "[SUCCESS] All packages have been updated"
     echo ""
 else
-    if [ -z "$MISSING" ]; then
-        echo "[OK] Alle Pakete sind vorhanden und aktuell!"
+    if [ ${#MISSING[@]} -eq 0 ]; then
+        echo "[OK] All packages are present and up to date!"
         echo ""
     fi
 fi
 
-# Abschluss
+# Summary
 echo "========================================"
-echo "  Aktuelle Installation:"
+echo "  Current installation:"
 echo "========================================"
 echo ""
 
-# yt-dlp Version anzeigen
+# Show yt-dlp version
 if command -v yt-dlp &> /dev/null; then
     YTDLP_VER=$(yt-dlp --version 2>&1)
-    echo "yt-dlp: Version $YTDLP_VER"
+    echo "yt-dlp: version $YTDLP_VER"
 else
-    echo "yt-dlp: nicht im Pfad oder nicht verfuegbar"
+    echo "yt-dlp: not on PATH or not available"
 fi
 
-# static-ffmpeg prüfen
-$PYTHON_CMD -c "import static_ffmpeg; print('static-ffmpeg: installiert (FFmpeg wird beim ersten Programmstart automatisch geladen)')" 2>/dev/null
+# Check static-ffmpeg (optional on Linux/macOS)
+$PYTHON_CMD -c "import static_ffmpeg; print('static-ffmpeg: installed (not required on Linux/macOS, system ffmpeg is used instead)')" 2>/dev/null
 if [ $? -ne 0 ]; then
-    echo "static-ffmpeg: nicht verfuegbar"
+    echo "static-ffmpeg: not installed (fine on Linux/macOS as long as system ffmpeg is installed)"
 fi
 
-# mutagen prüfen
-$PYTHON_CMD -c "import mutagen; print(f'mutagen: Version {mutagen.__version__}')" 2>/dev/null
+# Check mutagen
+$PYTHON_CMD -c "import importlib.metadata as m; print(f'mutagen: version {m.version(\"mutagen\")}')" 2>/dev/null
 if [ $? -ne 0 ]; then
-    echo "mutagen: nicht verfuegbar"
+    echo "mutagen: not available"
 fi
 
 echo ""
-echo "[FERTIG] Alle Pruefungen abgeschlossen!"
+echo "[DONE] All checks completed!"
 echo ""
