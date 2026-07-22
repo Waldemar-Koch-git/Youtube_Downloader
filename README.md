@@ -71,10 +71,22 @@ pip install "yt-dlp[default]" mutagen
 
 > **Note on `static-ffmpeg`:** Not needed on Linux/macOS and can be omitted. The script detects this automatically.
 
+> **Note on `pip install` errors:** On some systems (e.g. Debian/Ubuntu system Python, Homebrew Python on macOS) `pip` may refuse to install with an `externally-managed-environment` error (PEP 668). Either use the automatic update script below (it handles this automatically), or install into a virtual environment:
+> ```bash
+> python3 -m venv ~/.venvs/yt-downloader
+> source ~/.venvs/yt-downloader/bin/activate
+> pip install "yt-dlp[default]" mutagen
+> ```
+
 ### Automatic update script
 
 - **Windows:** `update_bibs_windows.bat` – double-click to check and update all dependencies.
-- **Linux/macOS:** `update_bibs_linux_macOS.sh` – run via `./update_bibs_linux_macOS.sh` (see note below).
+- **Linux/macOS:** `update_bibs_linux_macOS.sh` – make it executable once, then run it:
+  ```bash
+  chmod +x update_bibs_linux_macOS.sh
+  ./update_bibs_linux_macOS.sh
+  ```
+  Checks which packages are missing or outdated and installs/updates only what's needed. Automatically handles the `externally-managed-environment` (PEP 668) error mentioned above by retrying with `--break-system-packages`.
 
 ---
 
@@ -106,6 +118,8 @@ Or double-click the file.
 | `ModuleNotFoundError: yt_dlp` | `pip install yt-dlp` |
 | 429 error / age gate | Select a cookies browser in the settings |
 | Folder doesn't open | `sudo apt install xdg-utils` |
+| `error: externally-managed-environment` | Use `update_bibs_linux_macOS.sh` (handles it automatically), or install into a virtual environment (see note above) |
+| `Permission denied` when running `update_bibs_linux_macOS.sh` | Run `chmod +x update_bibs_linux_macOS.sh` first |
 
 ---
 
